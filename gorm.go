@@ -11,7 +11,7 @@ type GormAdapter struct {
 	model Tabler
 }
 
-func NewGormAdapter(db *gorm.DB) *GormAdapter {
+func NewGormAdapter(db *gorm.DB) QueryAdapter {
 	return &GormAdapter{db: db}
 }
 

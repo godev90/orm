@@ -69,6 +69,36 @@ func DefaultGormTablerAllowedFields(model Tabler) map[string]string {
 	return fields
 }
 
+func DefaultSqlTablerAllowedFields(model Tabler) map[string]string {
+	t := reflect.TypeOf(model)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	fields := make(map[string]string)
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		jsonName := f.Tag.Get("json")
+		if jsonName == "" || jsonName == "-" {
+			jsonName = strings.ToLower(f.Name)
+		}
+		sqlTag := f.Tag.Get("sql")
+		var columnName string
+		if sqlTag != "" {
+			for _, part := range strings.Split(sqlTag, ";") {
+				if strings.HasPrefix(part, "column:") {
+					columnName = strings.TrimPrefix(part, "column:")
+					break
+				}
+			}
+		}
+		if columnName != "" && regexp.MustCompile(`^[a-zA-Z0-9_]+$`).MatchString(columnName) {
+			fields[jsonName] = columnName
+		}
+	}
+	return fields
+}
+
 var debug = false
 
 func DebugOn() {

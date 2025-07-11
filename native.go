@@ -53,7 +53,7 @@ type SqlQueryAdapter struct {
 }
 
 // NewSqlAdapter wraps an existing *sql.DB.
-func NewSqlAdapter(db *sql.DB) *SqlQueryAdapter {
+func NewSqlAdapter(db *sql.DB) QueryAdapter {
 	return &SqlQueryAdapter{
 		db:       db,
 		ctx:      context.Background(),
@@ -89,6 +89,7 @@ func (q *SqlQueryAdapter) WithContext(ctx context.Context) QueryAdapter {
 
 func (q *SqlQueryAdapter) UseModel(m Tabler) QueryAdapter {
 	cp := q.clone()
+	cp.model = m
 	cp.table = m.TableName()
 	return cp
 }
@@ -191,6 +192,16 @@ func (q *SqlQueryAdapter) Count(target *int64) error {
 }
 
 func (q *SqlQueryAdapter) Scan(dest any) error {
+
+	if q.model == nil {
+		if _, ok := dest.(Tabler); !ok {
+			return ErrTablerNotImplemented
+		}
+
+		q.model = dest.(Tabler)
+		q.table = q.model.TableName()
+	}
+
 	sqlStr, args := q.build(false)
 
 	if debug {
@@ -210,7 +221,7 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 	cols, _ := rows.Columns()
 	val := reflect.ValueOf(dest)
 	if val.Kind() != reflect.Ptr || val.IsNil() {
-		return fmt.Errorf("adapter: dest must be non-nil pointer")
+		return ErrNilPointer
 	}
 
 	switch val.Elem().Kind() {
@@ -263,12 +274,25 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 		return rows.Err()
 	}
 
-	return errUnsupported
+	return ErrUnsupported
 }
 
-var errUnsupported = errors.New(fmt.Errorf("adapter: Scan unsupported destination"), &errors.ErrAttr{
-	Code: http.StatusInternalServerError,
-})
+var (
+	errUnsupported = fmt.Errorf("orm: Scan unsupported destination")
+	ErrUnsupported = errors.New(errUnsupported, &errors.ErrAttr{
+		Code: http.StatusInternalServerError,
+	})
+
+	errNilPointer = fmt.Errorf("orm: Nil pointer")
+	ErrNilPointer = errors.New(errNilPointer, &errors.ErrAttr{
+		Code: http.StatusInternalServerError,
+	})
+
+	errTablerNotImplemented = fmt.Errorf("orm: Tabler not implemented")
+	ErrTablerNotImplemented = errors.New(errTablerNotImplemented, &errors.ErrAttr{
+		Code: http.StatusInternalServerError,
+	})
+)
 
 func interpolate(sqlStr string, args []any, flavor driverFlavor) string {
 	var out strings.Builder
@@ -385,7 +409,7 @@ func makeScanTargets(dest any, cols []string) ([]any, error) {
 		val = val.Elem()
 	}
 	if val.Kind() != reflect.Struct {
-		return nil, errUnsupported
+		return nil, ErrUnsupported
 	}
 	fieldMap := buildFieldMap(val.Type())
 	targets := make([]any, len(cols))
@@ -407,9 +431,11 @@ func buildFieldMap(t reflect.Type) map[string]int {
 		if f.PkgPath != "" {
 			continue
 		}
-		if f.Tag.Get("gorm") == "-" || f.Tag.Get("sql") == "-" || f.Tag.Get("column") == "-" {
+
+		if f.Tag.Get("sql") == "-" {
 			continue
 		}
+
 		col, _ := parseColumnTag(f)
 		if col == "" {
 			col = toSnake(f.Name)
@@ -424,7 +450,7 @@ func parseColumnTag(f reflect.StructField) (string, bool) {
 		if strings.Contains(tag, "column:") {
 			for _, p := range strings.Split(tag, ";") {
 				if strings.HasPrefix(p, "column:") {
-					return strings.TrimPrefix(p, "column:"), strings.Contains(tag, "primary")
+					return strings.TrimPrefix(p, "column:"), strings.Contains(tag, "primaryKey")
 				}
 			}
 		} else if !strings.Contains(tag, ":") {
@@ -432,19 +458,13 @@ func parseColumnTag(f reflect.StructField) (string, bool) {
 		}
 		return "", false
 	}
-	if tag := f.Tag.Get("gorm"); tag != "" {
-		if col, pk := extract(tag); col != "" {
-			return col, pk
-		}
-	}
+
 	if tag := f.Tag.Get("sql"); tag != "" {
 		if col, pk := extract(tag); col != "" {
 			return col, pk
 		}
 	}
-	if tag := f.Tag.Get("column"); tag != "" {
-		return tag, false
-	}
+
 	return "", false
 }
 

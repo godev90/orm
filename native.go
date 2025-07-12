@@ -8,17 +8,97 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/godev90/validator/errors"
 )
 
-type driverFlavor int
+type (
+	driverFlavor    int
+	SqlQueryAdapter struct {
+		db     *sql.DB
+		ctx    context.Context
+		flavor driverFlavor
+
+		table     string
+		fields    []string
+		joins     []string
+		joinArgs  []any
+		scopes    []ScopeFunc
+		wheres    []string
+		whereArgs []any
+		orWheres  []string
+		orArgs    []any
+		orderBy   string
+		limit     *int
+		offset    *int
+
+		model Tabler
+	}
+)
 
 const (
 	flavorMySQL driverFlavor = iota
 	flavorPostgres
+)
+
+var (
+	errUnsupported = fmt.Errorf("orm: Scan unsupported destination")
+	ErrUnsupported = errors.New(errUnsupported, &errors.ErrAttr{
+		Code: http.StatusInternalServerError,
+	})
+
+	errNilPointer = fmt.Errorf("orm: Nil pointer")
+	ErrNilPointer = errors.New(errNilPointer, &errors.ErrAttr{
+		Code: http.StatusInternalServerError,
+	})
+
+	errTablerNotImplemented = fmt.Errorf("orm: Tabler not implemented")
+	ErrTablerNotImplemented = errors.New(errTablerNotImplemented, &errors.ErrAttr{
+		Code: http.StatusInternalServerError,
+	})
+
+	ErrUnsupportedRaw = func(raw any) error {
+		errUnsupportedRaw := fmt.Errorf("orm: Unsupported raw")
+		return errors.New(errUnsupportedRaw, &errors.ErrAttr{
+			Code: http.StatusInternalServerError,
+			Messages: []errors.LangPackage{
+				{
+					Tag:     errors.English,
+					Message: "orm: Unsupported raw %T",
+				},
+			},
+		}, raw)
+	}
+
+	ErrParseTimeFailed = func(str string) error {
+		errParseTimeFailed := fmt.Errorf("orm: cannot parse time")
+		return errors.New(errParseTimeFailed, &errors.ErrAttr{
+			Code: http.StatusInternalServerError,
+			Messages: []errors.LangPackage{
+				{
+					Tag:     errors.English,
+					Message: "Cannot parse time %q",
+				},
+			},
+		}, str)
+	}
+
+	ErrUnsupportedKind = func(kind string) error {
+		errUnsupportedKind := fmt.Errorf("orm: unsupported kind")
+		return errors.New(errUnsupportedKind, &errors.ErrAttr{
+			Code: http.StatusInternalServerError,
+			Messages: []errors.LangPackage{
+				{
+					Tag:     errors.English,
+					Message: "orm: Unsupported kind %s",
+				},
+			},
+		}, kind)
+
+	}
 )
 
 func detectFlavor(db *sql.DB) driverFlavor {
@@ -29,27 +109,6 @@ func detectFlavor(db *sql.DB) driverFlavor {
 	default:
 		return flavorMySQL
 	}
-}
-
-type SqlQueryAdapter struct {
-	db     *sql.DB
-	ctx    context.Context
-	flavor driverFlavor
-
-	table     string
-	fields    []string
-	joins     []string
-	joinArgs  []any
-	scopes    []ScopeFunc
-	wheres    []string
-	whereArgs []any
-	orWheres  []string
-	orArgs    []any
-	orderBy   string
-	limit     *int
-	offset    *int
-
-	model Tabler
 }
 
 // NewSqlAdapter wraps an existing *sql.DB.
@@ -102,7 +161,6 @@ func (q *SqlQueryAdapter) Where(cond any, args ...any) QueryAdapter {
 	cp := q.clone()
 
 	if sub, ok := cond.(*SqlQueryAdapter); ok {
-		// Bangun string kondisi sub-query
 		var sb strings.Builder
 		sb.WriteString("(")
 
@@ -184,22 +242,172 @@ func (q *SqlQueryAdapter) Scopes(fs ...ScopeFunc) QueryAdapter {
 	return q.Where(tmp)
 }
 
-func (q *SqlQueryAdapter) Clone() QueryAdapter { return q.clone() }
+func (q *SqlQueryAdapter) Clone() QueryAdapter {
+	return q.clone()
+}
 
 func (q *SqlQueryAdapter) Count(target *int64) error {
 	sqlStr, args := q.build(true)
 	return q.db.QueryRowContext(q.ctx, sqlStr, args...).Scan(target)
 }
 
+func normalize(col string) string {
+	col = strings.Trim(col, "`\"")
+	if idx := strings.LastIndex(col, "."); idx != -1 {
+		col = col[idx+1:]
+	}
+	return strings.ToLower(col)
+}
+
+func isEmptyRaw(v any) bool {
+	switch b := v.(type) {
+	case nil:
+		return true
+	case []byte:
+		return len(b) == 0
+	case sql.RawBytes:
+		return len(b) == 0
+	case string:
+		return strings.TrimSpace(b) == ""
+	default:
+		return false
+	}
+}
+
+var scannerT = reflect.TypeOf((*sql.Scanner)(nil)).Elem()
+
+func convertAssign(field reflect.Value, raw any) error {
+	if raw == nil {
+		field.Set(reflect.Zero(field.Type()))
+		return nil
+	}
+
+	isPtr := field.Kind() == reflect.Ptr
+
+	if isPtr && field.Type().Implements(scannerT) {
+		if isEmptyRaw(raw) {
+			field.Set(reflect.Zero(field.Type()))
+			return nil
+		}
+		if field.IsNil() {
+			field.Set(reflect.New(field.Type().Elem()))
+		}
+		return field.Interface().(sql.Scanner).Scan(toScalar(raw))
+	}
+
+	if field.CanAddr() && field.Addr().Type().Implements(scannerT) {
+		if isEmptyRaw(raw) {
+			// value non-pointer di-zero-kan
+			field.Set(reflect.Zero(field.Type()))
+			return nil
+		}
+		return field.Addr().Interface().(sql.Scanner).Scan(toScalar(raw))
+	}
+
+	if isPtr {
+		if isEmptyRaw(raw) {
+			field.Set(reflect.Zero(field.Type()))
+			return nil
+		}
+		field.Set(reflect.New(field.Type().Elem()))
+		return convertAssign(field.Elem(), raw)
+	}
+
+	if tm, ok := raw.(time.Time); ok && field.Type() == reflect.TypeOf(time.Time{}) {
+		field.Set(reflect.ValueOf(tm))
+		return nil
+	}
+
+	var str string
+	switch v := raw.(type) {
+	case []byte:
+		str = string(v)
+	case sql.RawBytes:
+		str = string(v)
+	case string:
+		str = v
+	default:
+		return ErrUnsupportedRaw(raw)
+	}
+	if strings.TrimSpace(str) == "" {
+		field.Set(reflect.Zero(field.Type()))
+		return nil
+	}
+
+	// 6. set sesuai kind (string/int/uint/float/bool/time)
+	switch field.Kind() {
+	case reflect.String:
+		field.SetString(str)
+
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		i, err := strconv.ParseInt(str, 10, 64)
+		if err != nil {
+			return err
+		}
+		field.SetInt(i)
+
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		u, err := strconv.ParseUint(str, 10, 64)
+		if err != nil {
+			return err
+		}
+		field.SetUint(u)
+
+	case reflect.Float32, reflect.Float64:
+		f, err := strconv.ParseFloat(str, 64)
+		if err != nil {
+			return err
+		}
+		field.SetFloat(f)
+
+	case reflect.Bool:
+		field.SetBool(str == "1" || strings.EqualFold(str, "true"))
+
+	case reflect.Struct:
+		if field.Type() == reflect.TypeOf(time.Time{}) {
+			for _, layout := range []string{
+				"2006-01-02 15:04:05",
+				"2006-01-02T15:04:05Z",
+				"2006-01-02",
+				time.RFC3339,
+			} {
+				if t, err := time.ParseInLocation(layout, str, time.Local); err == nil {
+					field.Set(reflect.ValueOf(t))
+					return nil
+				}
+			}
+			return ErrParseTimeFailed(str)
+		}
+		fallthrough
+
+	default:
+		return ErrUnsupportedKind(field.Kind().String())
+	}
+
+	return nil
+}
+
+/* toScalar: aman untuk sql.RawBytes / []byte */
+func toScalar(v any) any {
+	switch b := v.(type) {
+	case sql.RawBytes:
+		return string([]byte(b))
+	case []byte:
+		return string(b)
+	default:
+		return v
+	}
+}
+
 func (q *SqlQueryAdapter) Scan(dest any) error {
 
 	if q.model == nil {
-		if _, ok := dest.(Tabler); !ok {
+		if t, ok := dest.(Tabler); ok {
+			q.model = t
+			q.table = q.model.TableName()
+		} else {
 			return ErrTablerNotImplemented
 		}
-
-		q.model = dest.(Tabler)
-		q.table = q.model.TableName()
 	}
 
 	sqlStr, args := q.build(false)
@@ -207,9 +415,7 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 	if debug {
 		rendered := interpolate(sqlStr, args, q.flavor)
 		start := time.Now()
-		defer func() {
-			log.Printf("[sql] %s | %s\n", rendered, time.Since(start))
-		}()
+		defer func() { log.Printf("[sql] %s | %s\n", rendered, time.Since(start)) }()
 	}
 
 	rows, err := q.db.QueryContext(q.ctx, sqlStr, args...)
@@ -224,32 +430,58 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 		return ErrNilPointer
 	}
 
+	makeHolders := func() ([]any, []sql.RawBytes) {
+		rawBytes := make([]sql.RawBytes, len(cols))
+		holders := make([]any, len(cols))
+		for i := range holders {
+			holders[i] = &rawBytes[i]
+		}
+		return holders, rawBytes
+	}
+
 	switch val.Elem().Kind() {
+
 	case reflect.Slice:
 		slice := val.Elem()
 		elemTyp := slice.Type().Elem()
+		fieldMap := buildFieldMap(elemTyp)
+
 		for rows.Next() {
-			elemPtr := reflect.New(elemTyp)
-			targets, e := makeScanTargets(elemPtr.Interface(), cols)
-			if e != nil {
-				return e
-			}
-			if err := rows.Scan(targets...); err != nil {
+			holders, raw := makeHolders()
+			if err := rows.Scan(holders...); err != nil {
 				return err
 			}
+
+			elemPtr := reflect.New(elemTyp)
+			for ci, col := range cols {
+				if fi, ok := fieldMap[normalize(col)]; ok {
+					field := elemPtr.Elem().Field(fi)
+					if err := convertAssign(field, raw[ci]); err != nil {
+						return err
+					}
+				}
+			}
+
 			slice = reflect.Append(slice, elemPtr.Elem())
 		}
+
 		val.Elem().Set(slice)
 		return rows.Err()
 
 	case reflect.Struct:
 		if rows.Next() {
-			targets, e := makeScanTargets(dest, cols)
-			if e != nil {
-				return e
-			}
-			if err := rows.Scan(targets...); err != nil {
+			holders, raw := makeHolders()
+			if err := rows.Scan(holders...); err != nil {
 				return err
+			}
+
+			fieldMap := buildFieldMap(val.Elem().Type())
+			for ci, col := range cols {
+				if fi, ok := fieldMap[normalize(col)]; ok {
+					if err := convertAssign(val.Elem().Field(fi), raw[ci]); err != nil {
+						return err
+					}
+				}
 			}
 		}
 		return rows.Err()
@@ -257,17 +489,18 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 
 	if mp, ok := dest.(*[]map[string]any); ok {
 		for rows.Next() {
-			vals := make([]any, len(cols))
-			ptrs := make([]any, len(cols))
-			for i := range vals {
-				ptrs[i] = &vals[i]
-			}
-			if err := rows.Scan(ptrs...); err != nil {
+			holders, raw := makeHolders()
+			if err := rows.Scan(holders...); err != nil {
 				return err
 			}
+
 			rec := map[string]any{}
-			for i, c := range cols {
-				rec[c] = vals[i]
+			for ci, col := range cols {
+				if raw[ci] == nil {
+					rec[col] = nil
+				} else {
+					rec[col] = string(raw[ci])
+				}
 			}
 			*mp = append(*mp, rec)
 		}
@@ -276,23 +509,6 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 
 	return ErrUnsupported
 }
-
-var (
-	errUnsupported = fmt.Errorf("orm: Scan unsupported destination")
-	ErrUnsupported = errors.New(errUnsupported, &errors.ErrAttr{
-		Code: http.StatusInternalServerError,
-	})
-
-	errNilPointer = fmt.Errorf("orm: Nil pointer")
-	ErrNilPointer = errors.New(errNilPointer, &errors.ErrAttr{
-		Code: http.StatusInternalServerError,
-	})
-
-	errTablerNotImplemented = fmt.Errorf("orm: Tabler not implemented")
-	ErrTablerNotImplemented = errors.New(errTablerNotImplemented, &errors.ErrAttr{
-		Code: http.StatusInternalServerError,
-	})
-)
 
 func interpolate(sqlStr string, args []any, flavor driverFlavor) string {
 	var out strings.Builder
@@ -401,27 +617,6 @@ func (q *SqlQueryAdapter) build(count bool) (string, []any) {
 		sqlStr = b.String()
 	}
 	return sqlStr, args
-}
-
-func makeScanTargets(dest any, cols []string) ([]any, error) {
-	val := reflect.ValueOf(dest)
-	if val.Kind() == reflect.Ptr {
-		val = val.Elem()
-	}
-	if val.Kind() != reflect.Struct {
-		return nil, ErrUnsupported
-	}
-	fieldMap := buildFieldMap(val.Type())
-	targets := make([]any, len(cols))
-	for i, c := range cols {
-		if idx, ok := fieldMap[strings.ToLower(c)]; ok {
-			targets[i] = val.Field(idx).Addr().Interface()
-		} else {
-			var dummy any
-			targets[i] = &dummy
-		}
-	}
-	return targets, nil
 }
 
 func buildFieldMap(t reflect.Type) map[string]int {

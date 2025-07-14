@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/godev90/validator/errors"
+	"github.com/godev90/validator/faults"
 )
 
 type (
@@ -46,27 +46,27 @@ const (
 
 var (
 	errUnsupported = fmt.Errorf("orm: Scan unsupported destination")
-	ErrUnsupported = errors.New(errUnsupported, &errors.ErrAttr{
+	ErrUnsupported = faults.New(errUnsupported, &faults.ErrAttr{
 		Code: http.StatusInternalServerError,
 	})
 
 	errNilPointer = fmt.Errorf("orm: Nil pointer")
-	ErrNilPointer = errors.New(errNilPointer, &errors.ErrAttr{
+	ErrNilPointer = faults.New(errNilPointer, &faults.ErrAttr{
 		Code: http.StatusInternalServerError,
 	})
 
 	errTablerNotImplemented = fmt.Errorf("orm: Tabler not implemented")
-	ErrTablerNotImplemented = errors.New(errTablerNotImplemented, &errors.ErrAttr{
+	ErrTablerNotImplemented = faults.New(errTablerNotImplemented, &faults.ErrAttr{
 		Code: http.StatusInternalServerError,
 	})
 
 	ErrUnsupportedRaw = func(raw any) error {
 		errUnsupportedRaw := fmt.Errorf("orm: Unsupported raw")
-		return errors.New(errUnsupportedRaw, &errors.ErrAttr{
+		return faults.New(errUnsupportedRaw, &faults.ErrAttr{
 			Code: http.StatusInternalServerError,
-			Messages: []errors.LangPackage{
+			Messages: []faults.LangPackage{
 				{
-					Tag:     errors.English,
+					Tag:     faults.English,
 					Message: "orm: Unsupported raw %T",
 				},
 			},
@@ -75,11 +75,11 @@ var (
 
 	ErrParseTimeFailed = func(str string) error {
 		errParseTimeFailed := fmt.Errorf("orm: cannot parse time")
-		return errors.New(errParseTimeFailed, &errors.ErrAttr{
+		return faults.New(errParseTimeFailed, &faults.ErrAttr{
 			Code: http.StatusInternalServerError,
-			Messages: []errors.LangPackage{
+			Messages: []faults.LangPackage{
 				{
-					Tag:     errors.English,
+					Tag:     faults.English,
 					Message: "Cannot parse time %q",
 				},
 			},
@@ -88,11 +88,11 @@ var (
 
 	ErrUnsupportedKind = func(kind string) error {
 		errUnsupportedKind := fmt.Errorf("orm: unsupported kind")
-		return errors.New(errUnsupportedKind, &errors.ErrAttr{
+		return faults.New(errUnsupportedKind, &faults.ErrAttr{
 			Code: http.StatusInternalServerError,
-			Messages: []errors.LangPackage{
+			Messages: []faults.LangPackage{
 				{
-					Tag:     errors.English,
+					Tag:     faults.English,
 					Message: "orm: Unsupported kind %s",
 				},
 			},

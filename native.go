@@ -104,7 +104,7 @@ var (
 func detectFlavor(db *sql.DB) driverFlavor {
 	t := strings.TrimPrefix(reflect.TypeOf(db.Driver()).String(), "*")
 	switch {
-	case strings.Contains(t, "pq"), strings.Contains(t, "pgx"), strings.Contains(t, "postgres"):
+	case strings.Contains(t, "pq"), strings.Contains(t, "pgx"), strings.Contains(t, "postgres"), strings.Contains(t, "stdlib"):
 		return flavorPostgres
 	default:
 		return flavorMySQL
@@ -400,6 +400,7 @@ func toScalar(v any) any {
 }
 
 func (q *SqlQueryAdapter) Scan(dest any) error {
+	notFound := true
 
 	if q.model == nil {
 		if t, ok := dest.(Tabler); ok {
@@ -447,6 +448,7 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 		fieldMap := buildFieldMap(elemTyp)
 
 		for rows.Next() {
+			notFound = false
 			holders, raw := makeHolders()
 			if err := rows.Scan(holders...); err != nil {
 				return err
@@ -466,10 +468,16 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 		}
 
 		val.Elem().Set(slice)
+
+		if rows.Err() == nil && notFound {
+			return sql.ErrNoRows
+		}
+
 		return rows.Err()
 
 	case reflect.Struct:
 		if rows.Next() {
+			notFound = false
 			holders, raw := makeHolders()
 			if err := rows.Scan(holders...); err != nil {
 				return err
@@ -484,11 +492,17 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 				}
 			}
 		}
+
+		if rows.Err() == nil && notFound {
+			return sql.ErrNoRows
+		}
+
 		return rows.Err()
 	}
 
 	if mp, ok := dest.(*[]map[string]any); ok {
 		for rows.Next() {
+			notFound = false
 			holders, raw := makeHolders()
 			if err := rows.Scan(holders...); err != nil {
 				return err
@@ -504,6 +518,11 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 			}
 			*mp = append(*mp, rec)
 		}
+
+		if rows.Err() == nil && notFound {
+			return sql.ErrNoRows
+		}
+
 		return rows.Err()
 	}
 

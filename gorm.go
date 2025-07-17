@@ -2,6 +2,7 @@ package orm
 
 import (
 	"context"
+	"errors"
 
 	"gorm.io/gorm"
 )
@@ -96,4 +97,18 @@ func (g *GormAdapter) Scan(dest any) error {
 	}
 
 	return g.db.Find(dest).Error
+}
+
+func (g *GormAdapter) First(dest any) (err error) {
+	if debug {
+		err = g.db.Debug().First(dest).Error
+	} else {
+		err = g.db.First(dest).Error
+	}
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrNotFound
+	}
+
+	return err
 }

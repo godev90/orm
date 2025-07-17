@@ -19,6 +19,7 @@ type (
 		Offset(offset int) QueryAdapter
 		Order(order string) QueryAdapter
 		Scan(dest any) error
+		First(dest any) error
 		Model() Tabler
 		UseModel(Tabler) QueryAdapter
 		Join(joinClause string, args ...any) QueryAdapter

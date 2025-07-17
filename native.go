@@ -45,60 +45,58 @@ const (
 )
 
 var (
-	errUnsupported = fmt.Errorf("orm: Scan unsupported destination")
+	errUnsupported = fmt.Errorf("orm: scan unsupported destination")
 	ErrUnsupported = faults.New(errUnsupported, &faults.ErrAttr{
 		Code: http.StatusInternalServerError,
 	})
 
-	errNilPointer = fmt.Errorf("orm: Nil pointer")
+	errNilPointer = fmt.Errorf("orm: nil pointer")
 	ErrNilPointer = faults.New(errNilPointer, &faults.ErrAttr{
 		Code: http.StatusInternalServerError,
 	})
 
-	errTablerNotImplemented = fmt.Errorf("orm: Tabler not implemented")
+	errTablerNotImplemented = fmt.Errorf("orm: tabler not implemented")
 	ErrTablerNotImplemented = faults.New(errTablerNotImplemented, &faults.ErrAttr{
 		Code: http.StatusInternalServerError,
 	})
 
-	ErrUnsupportedRaw = func(raw any) error {
-		errUnsupportedRaw := fmt.Errorf("orm: Unsupported raw")
-		return faults.New(errUnsupportedRaw, &faults.ErrAttr{
-			Code: http.StatusInternalServerError,
-			Messages: []faults.LangPackage{
-				{
-					Tag:     faults.English,
-					Message: "orm: Unsupported raw %T",
-				},
+	errUnsupportedRaw = fmt.Errorf("orm: unsupported raw")
+	ErrUnsupportedRaw = faults.New(errUnsupportedRaw, &faults.ErrAttr{
+		Code: http.StatusInternalServerError,
+		Messages: []faults.LangPackage{
+			{
+				Tag:     faults.English,
+				Message: "orm: unsupported raw %T",
 			},
-		}, raw)
-	}
+		},
+	})
 
-	ErrParseTimeFailed = func(str string) error {
-		errParseTimeFailed := fmt.Errorf("orm: cannot parse time")
-		return faults.New(errParseTimeFailed, &faults.ErrAttr{
-			Code: http.StatusInternalServerError,
-			Messages: []faults.LangPackage{
-				{
-					Tag:     faults.English,
-					Message: "Cannot parse time %q",
-				},
+	errParseTimeFailed = fmt.Errorf("orm: cannot parse time")
+	ErrParseTimeFailed = faults.New(errParseTimeFailed, &faults.ErrAttr{
+		Code: http.StatusInternalServerError,
+		Messages: []faults.LangPackage{
+			{
+				Tag:     faults.English,
+				Message: "orm: cannot parse time %q",
 			},
-		}, str)
-	}
+		},
+	})
 
-	ErrUnsupportedKind = func(kind string) error {
-		errUnsupportedKind := fmt.Errorf("orm: unsupported kind")
-		return faults.New(errUnsupportedKind, &faults.ErrAttr{
-			Code: http.StatusInternalServerError,
-			Messages: []faults.LangPackage{
-				{
-					Tag:     faults.English,
-					Message: "orm: Unsupported kind %s",
-				},
+	errUnsupportedKind = fmt.Errorf("orm: unsupported kind")
+	ErrUnsupportedKind = faults.New(errUnsupportedKind, &faults.ErrAttr{
+		Code: http.StatusInternalServerError,
+		Messages: []faults.LangPackage{
+			{
+				Tag:     faults.English,
+				Message: "orm: unsupported kind %s",
 			},
-		}, kind)
+		},
+	})
 
-	}
+	errNotFound = fmt.Errorf("orm: record not found")
+	ErrNotFound = faults.New(errNotFound, &faults.ErrAttr{
+		Code: http.StatusNotFound,
+	})
 )
 
 func detectFlavor(db *sql.DB) driverFlavor {
@@ -327,7 +325,7 @@ func convertAssign(field reflect.Value, raw any) error {
 	case string:
 		str = v
 	default:
-		return ErrUnsupportedRaw(raw)
+		return ErrUnsupportedRaw.Render(raw)
 	}
 	if strings.TrimSpace(str) == "" {
 		field.Set(reflect.Zero(field.Type()))
@@ -376,12 +374,12 @@ func convertAssign(field reflect.Value, raw any) error {
 					return nil
 				}
 			}
-			return ErrParseTimeFailed(str)
+			return ErrParseTimeFailed.Render(str)
 		}
 		fallthrough
 
 	default:
-		return ErrUnsupportedKind(field.Kind().String())
+		return ErrUnsupportedKind.Render(field.Kind().String())
 	}
 
 	return nil
@@ -400,7 +398,7 @@ func toScalar(v any) any {
 }
 
 func (q *SqlQueryAdapter) Scan(dest any) error {
-	notFound := true
+	// notFound := true
 
 	if q.model == nil {
 		if t, ok := dest.(Tabler); ok {
@@ -448,7 +446,7 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 		fieldMap := buildFieldMap(elemTyp)
 
 		for rows.Next() {
-			notFound = false
+			// notFound = false
 			holders, raw := makeHolders()
 			if err := rows.Scan(holders...); err != nil {
 				return err
@@ -469,15 +467,15 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 
 		val.Elem().Set(slice)
 
-		if rows.Err() == nil && notFound {
-			return sql.ErrNoRows
-		}
+		// if rows.Err() == nil && notFound {
+		// 	return ErrNotFound
+		// }
 
 		return rows.Err()
 
 	case reflect.Struct:
 		if rows.Next() {
-			notFound = false
+			// notFound = false
 			holders, raw := makeHolders()
 			if err := rows.Scan(holders...); err != nil {
 				return err
@@ -493,16 +491,16 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 			}
 		}
 
-		if rows.Err() == nil && notFound {
-			return sql.ErrNoRows
-		}
+		// if rows.Err() == nil && notFound {
+		// 	return ErrNotFound
+		// }
 
 		return rows.Err()
 	}
 
 	if mp, ok := dest.(*[]map[string]any); ok {
 		for rows.Next() {
-			notFound = false
+			// notFound = false
 			holders, raw := makeHolders()
 			if err := rows.Scan(holders...); err != nil {
 				return err
@@ -519,14 +517,102 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 			*mp = append(*mp, rec)
 		}
 
-		if rows.Err() == nil && notFound {
-			return sql.ErrNoRows
-		}
+		// if rows.Err() == nil && notFound {
+		// 	return ErrNotFound
+		// }
 
 		return rows.Err()
 	}
 
 	return ErrUnsupported
+}
+
+func (q *SqlQueryAdapter) First(dest any) error {
+	if q.model == nil {
+		if t, ok := dest.(Tabler); ok {
+			q.model = t
+			q.table = q.model.TableName()
+		} else {
+			return ErrTablerNotImplemented
+		}
+	}
+
+	sqlStr, args := q.build(false)
+
+	// Limit 1 jika belum ada
+	if !strings.Contains(strings.ToLower(sqlStr), "limit") {
+		sqlStr += " LIMIT 1"
+	}
+
+	if debug {
+		rendered := interpolate(sqlStr, args, q.flavor)
+		start := time.Now()
+		defer func() { log.Printf("[sql] %s | %s\n", rendered, time.Since(start)) }()
+	}
+
+	rows, err := q.db.QueryContext(q.ctx, sqlStr, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if rows.Err() != nil {
+			return rows.Err()
+		}
+		return ErrNotFound
+	}
+
+	cols, _ := rows.Columns()
+	val := reflect.ValueOf(dest)
+	if val.Kind() != reflect.Ptr || val.IsNil() {
+		return ErrNilPointer
+	}
+
+	holders := make([]any, len(cols))
+	raw := make([]sql.RawBytes, len(cols))
+	for i := range holders {
+		holders[i] = &raw[i]
+	}
+
+	if err := rows.Scan(holders...); err != nil {
+		return err
+	}
+
+	switch val.Elem().Kind() {
+	case reflect.Struct:
+		fieldMap := buildFieldMap(val.Elem().Type())
+		for ci, col := range cols {
+			if fi, ok := fieldMap[normalize(col)]; ok {
+				if err := convertAssign(val.Elem().Field(fi), raw[ci]); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+
+	case reflect.Slice:
+		// Ambil first element untuk slice
+		elemTyp := val.Elem().Type().Elem()
+		elemPtr := reflect.New(elemTyp)
+		fieldMap := buildFieldMap(elemTyp)
+
+		for ci, col := range cols {
+			if fi, ok := fieldMap[normalize(col)]; ok {
+				if err := convertAssign(elemPtr.Elem().Field(fi), raw[ci]); err != nil {
+					return err
+				}
+			}
+		}
+
+		slice := reflect.MakeSlice(val.Elem().Type(), 1, 1)
+		slice.Index(0).Set(elemPtr.Elem())
+		val.Elem().Set(slice)
+		return nil
+
+	default:
+		return ErrUnsupported
+	}
 }
 
 func interpolate(sqlStr string, args []any, flavor driverFlavor) string {

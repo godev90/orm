@@ -472,22 +472,28 @@ func (q *SqlQueryAdapter) Patch(model any, fields map[string]any) error {
 	}
 
 	typ := val.Type()
+
 	var pkCol string
 	var pkVal any
+	validCols := map[string]struct{}{}
 
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
-		if field.PkgPath != "" {
+		if field.PkgPath != "" || field.Tag.Get("sql") == "-" {
 			continue
 		}
-		if col, isPK := parseColumnTag(field); isPK {
-			pkCol = col
-			if pkCol == "" {
-				pkCol = toSnake(field.Name)
-			}
-			pkVal = val.Field(i).Interface()
-			break
+
+		col, isPK := parseColumnTag(field)
+		if col == "" {
+			col = toSnake(field.Name)
 		}
+
+		if isPK {
+			pkCol = col
+			pkVal = val.Field(i).Interface()
+		}
+
+		validCols[col] = struct{}{}
 	}
 
 	if pkCol == "" {
@@ -500,10 +506,15 @@ func (q *SqlQueryAdapter) Patch(model any, fields map[string]any) error {
 	args := []any{}
 
 	for col, v := range fields {
+		if _, ok := validCols[col]; !ok {
+			return faults.New(fmt.Errorf("invalid column: %s", col), &faults.ErrAttr{
+				Code: http.StatusBadRequest,
+			})
+		}
 		cols = append(cols, fmt.Sprintf("%s = ?", col))
 		args = append(args, v)
 	}
-	args = append(args, pkVal) // add WHERE ... id = ?
+	args = append(args, pkVal)
 
 	if q.table == "" {
 		if tabler, ok := model.(Tabler); ok {

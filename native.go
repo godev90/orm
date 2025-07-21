@@ -397,6 +397,214 @@ func toScalar(v any) any {
 	}
 }
 
+func (q *SqlQueryAdapter) Create(model any) error {
+	val := reflect.ValueOf(model)
+	if val.Kind() != reflect.Ptr || val.IsNil() {
+		return ErrNilPointer
+	}
+	val = val.Elem()
+	if val.Kind() != reflect.Struct {
+		return ErrUnsupported
+	}
+
+	typ := val.Type()
+	cols := []string{}
+	placeholders := []string{}
+	args := []any{}
+
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+
+		if field.PkgPath != "" || field.Tag.Get("sql") == "-" {
+			continue
+		}
+
+		col, _ := parseColumnTag(field)
+		if col == "" {
+			col = toSnake(field.Name)
+		}
+
+		fieldVal := val.Field(i)
+		// Skip zero value on auto increment ID (e.g., primary key)
+		if pk := strings.Contains(field.Tag.Get("sql"), "primaryKey"); pk {
+			continue
+		}
+
+		cols = append(cols, col)
+		placeholders = append(placeholders, "?")
+		args = append(args, fieldVal.Interface())
+	}
+
+	if q.table == "" {
+		if tabler, ok := model.(Tabler); ok {
+			q = q.clone()
+			q.table = tabler.TableName()
+		} else {
+			return ErrTablerNotImplemented
+		}
+	}
+
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+		q.table,
+		strings.Join(cols, ", "),
+		strings.Join(placeholders, ", "),
+	)
+
+	if debug {
+		start := time.Now()
+		defer func() {
+			log.Printf("[sql] %s | %s\n", interpolate(query, args, q.flavor), time.Since(start))
+		}()
+	}
+
+	_, err := q.db.ExecContext(q.ctx, query, args...)
+	return err
+}
+
+func (q *SqlQueryAdapter) Patch(model any, fields map[string]any) error {
+	val := reflect.ValueOf(model)
+	if val.Kind() != reflect.Ptr || val.IsNil() {
+		return ErrNilPointer
+	}
+	val = val.Elem()
+	if val.Kind() != reflect.Struct {
+		return ErrUnsupported
+	}
+
+	typ := val.Type()
+	var pkCol string
+	var pkVal any
+
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
+		if col, isPK := parseColumnTag(field); isPK {
+			pkCol = col
+			if pkCol == "" {
+				pkCol = toSnake(field.Name)
+			}
+			pkVal = val.Field(i).Interface()
+			break
+		}
+	}
+
+	if pkCol == "" {
+		return faults.New(fmt.Errorf("orm: primary key not found"), &faults.ErrAttr{
+			Code: http.StatusBadRequest,
+		})
+	}
+
+	cols := []string{}
+	args := []any{}
+
+	for col, v := range fields {
+		cols = append(cols, fmt.Sprintf("%s = ?", col))
+		args = append(args, v)
+	}
+	args = append(args, pkVal) // add WHERE ... id = ?
+
+	if q.table == "" {
+		if tabler, ok := model.(Tabler); ok {
+			q = q.clone()
+			q.table = tabler.TableName()
+		} else {
+			return ErrTablerNotImplemented
+		}
+	}
+
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ?",
+		q.table,
+		strings.Join(cols, ", "),
+		pkCol,
+	)
+
+	if debug {
+		start := time.Now()
+		defer func() {
+			log.Printf("[sql] %s | %s\n", interpolate(query, args, q.flavor), time.Since(start))
+		}()
+	}
+
+	_, err := q.db.ExecContext(q.ctx, query, args...)
+	return err
+}
+
+func (q *SqlQueryAdapter) Update(model any) error {
+	val := reflect.ValueOf(model)
+	if val.Kind() != reflect.Ptr || val.IsNil() {
+		return ErrNilPointer
+	}
+	val = val.Elem()
+	if val.Kind() != reflect.Struct {
+		return ErrUnsupported
+	}
+
+	typ := val.Type()
+
+	var pkCol string
+	var pkVal any
+	cols := []string{}
+	args := []any{}
+
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if field.PkgPath != "" || field.Tag.Get("sql") == "-" {
+			continue
+		}
+
+		col, isPK := parseColumnTag(field)
+		if col == "" {
+			col = toSnake(field.Name)
+		}
+
+		value := val.Field(i).Interface()
+
+		if isPK {
+			pkCol = col
+			pkVal = value
+			continue // primary key tidak ikut di SET
+		}
+
+		cols = append(cols, fmt.Sprintf("%s = ?", col))
+		args = append(args, value)
+	}
+
+	if pkCol == "" {
+		return faults.New(fmt.Errorf("orm: primary key not found"), &faults.ErrAttr{
+			Code: http.StatusBadRequest,
+		})
+	}
+
+	args = append(args, pkVal)
+
+	if q.table == "" {
+		if tabler, ok := model.(Tabler); ok {
+			q = q.clone()
+			q.table = tabler.TableName()
+		} else {
+			return ErrTablerNotImplemented
+		}
+	}
+
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ?",
+		q.table,
+		strings.Join(cols, ", "),
+		pkCol,
+	)
+
+	if debug {
+		start := time.Now()
+		defer func() {
+			log.Printf("[sql] %s | %s\n", interpolate(query, args, q.flavor), time.Since(start))
+		}()
+	}
+
+	_, err := q.db.ExecContext(q.ctx, query, args...)
+	return err
+}
+
 func (q *SqlQueryAdapter) Scan(dest any) error {
 	// notFound := true
 

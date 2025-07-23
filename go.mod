@@ -3,7 +3,7 @@ module github.com/godev90/orm
 go 1.23.4
 
 require (
-	github.com/godev90/validator v0.1.7
+	github.com/godev90/validator v0.1.11
 	gorm.io/gorm v1.30.0
 )
 

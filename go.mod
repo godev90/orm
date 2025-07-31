@@ -4,6 +4,7 @@ go 1.23.4
 
 require (
 	github.com/godev90/validator v0.1.11
+	github.com/lib/pq v1.10.9
 	gorm.io/gorm v1.30.0
 )
 

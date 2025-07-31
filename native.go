@@ -3,6 +3,7 @@ package orm
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/godev90/validator/faults"
+	"github.com/lib/pq"
 )
 
 type (
@@ -274,115 +276,345 @@ func isEmptyRaw(v any) bool {
 
 var scannerT = reflect.TypeOf((*sql.Scanner)(nil)).Elem()
 
+// func convertAssign(field reflect.Value, raw any) error {
+// 	if raw == nil {
+// 		field.Set(reflect.Zero(field.Type()))
+// 		return nil
+// 	}
+
+// 	isPtr := field.Kind() == reflect.Ptr
+
+// 	if isPtr && field.Type().Implements(scannerT) {
+// 		if isEmptyRaw(raw) {
+// 			field.Set(reflect.Zero(field.Type()))
+// 			return nil
+// 		}
+// 		if field.IsNil() {
+// 			field.Set(reflect.New(field.Type().Elem()))
+// 		}
+// 		return field.Interface().(sql.Scanner).Scan(toScalar(raw))
+// 	}
+
+// 	if field.CanAddr() && field.Addr().Type().Implements(scannerT) {
+// 		if isEmptyRaw(raw) {
+// 			// value non-pointer di-zero-kan
+// 			field.Set(reflect.Zero(field.Type()))
+// 			return nil
+// 		}
+// 		return field.Addr().Interface().(sql.Scanner).Scan(toScalar(raw))
+// 	}
+
+// 	if isPtr {
+// 		if isEmptyRaw(raw) {
+// 			field.Set(reflect.Zero(field.Type()))
+// 			return nil
+// 		}
+// 		field.Set(reflect.New(field.Type().Elem()))
+// 		return convertAssign(field.Elem(), raw)
+// 	}
+
+// 	if tm, ok := raw.(time.Time); ok && field.Type() == reflect.TypeOf(time.Time{}) {
+// 		field.Set(reflect.ValueOf(tm))
+// 		return nil
+// 	}
+
+// 	var str string
+// 	switch v := raw.(type) {
+// 	case []byte:
+// 		str = string(v)
+// 	case sql.RawBytes:
+// 		str = string(v)
+// 	case string:
+// 		str = v
+// 	default:
+// 		return ErrUnsupportedRaw.Render(raw)
+// 	}
+// 	if strings.TrimSpace(str) == "" {
+// 		field.Set(reflect.Zero(field.Type()))
+// 		return nil
+// 	}
+
+// 	// 6. set sesuai kind (string/int/uint/float/bool/time)
+// 	switch field.Kind() {
+// 	case reflect.String:
+// 		field.SetString(str)
+
+// 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+// 		i, err := strconv.ParseInt(str, 10, 64)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		field.SetInt(i)
+
+// 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+// 		u, err := strconv.ParseUint(str, 10, 64)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		field.SetUint(u)
+
+// 	case reflect.Float32, reflect.Float64:
+// 		f, err := strconv.ParseFloat(str, 64)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		field.SetFloat(f)
+
+// 	case reflect.Bool:
+// 		field.SetBool(str == "1" || strings.EqualFold(str, "true"))
+
+// 	case reflect.Struct:
+// 		if field.Type() == reflect.TypeOf(time.Time{}) {
+// 			for _, layout := range []string{
+// 				"2006-01-02 15:04:05",
+// 				"2006-01-02T15:04:05Z",
+// 				"2006-01-02",
+// 				time.RFC3339,
+// 			} {
+// 				if t, err := time.ParseInLocation(layout, str, time.Local); err == nil {
+// 					field.Set(reflect.ValueOf(t))
+// 					return nil
+// 				}
+// 			}
+// 			return ErrParseTimeFailed.Render(str)
+// 		}
+// 		fallthrough
+
+// 	default:
+// 		return ErrUnsupportedKind.Render(field.Kind().String())
+// 	}
+
+// 	return nil
+// }
+
 func convertAssign(field reflect.Value, raw any) error {
-	if raw == nil {
+	if raw == nil || isEmptyRaw(raw) {
 		field.Set(reflect.Zero(field.Type()))
 		return nil
 	}
 
-	isPtr := field.Kind() == reflect.Ptr
-
-	if isPtr && field.Type().Implements(scannerT) {
-		if isEmptyRaw(raw) {
-			field.Set(reflect.Zero(field.Type()))
-			return nil
-		}
-		if field.IsNil() {
-			field.Set(reflect.New(field.Type().Elem()))
-		}
-		return field.Interface().(sql.Scanner).Scan(toScalar(raw))
+	if isScanner(field) {
+		return assignWithScanner(field, raw)
 	}
 
-	if field.CanAddr() && field.Addr().Type().Implements(scannerT) {
-		if isEmptyRaw(raw) {
-			// value non-pointer di-zero-kan
-			field.Set(reflect.Zero(field.Type()))
-			return nil
-		}
-		return field.Addr().Interface().(sql.Scanner).Scan(toScalar(raw))
-	}
-
-	if isPtr {
-		if isEmptyRaw(raw) {
-			field.Set(reflect.Zero(field.Type()))
-			return nil
-		}
+	if field.Kind() == reflect.Ptr {
 		field.Set(reflect.New(field.Type().Elem()))
 		return convertAssign(field.Elem(), raw)
 	}
 
-	if tm, ok := raw.(time.Time); ok && field.Type() == reflect.TypeOf(time.Time{}) {
-		field.Set(reflect.ValueOf(tm))
-		return nil
-	}
-
-	var str string
-	switch v := raw.(type) {
-	case []byte:
-		str = string(v)
-	case sql.RawBytes:
-		str = string(v)
-	case string:
-		str = v
-	default:
-		return ErrUnsupportedRaw.Render(raw)
-	}
-	if strings.TrimSpace(str) == "" {
-		field.Set(reflect.Zero(field.Type()))
-		return nil
-	}
-
-	// 6. set sesuai kind (string/int/uint/float/bool/time)
 	switch field.Kind() {
 	case reflect.String:
-		field.SetString(str)
-
+		return assignString(field, raw)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		i, err := strconv.ParseInt(str, 10, 64)
+		return assignInt(field, raw)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return assignUint(field, raw)
+	case reflect.Float32, reflect.Float64:
+		return assignFloat(field, raw)
+	case reflect.Bool:
+		return assignBool(field, raw)
+	case reflect.Struct:
+		if field.Type() == reflect.TypeOf(time.Time{}) {
+			return assignTime(field, raw)
+		}
+		return assignJSON(field, raw)
+	case reflect.Slice:
+		return assignSlice(field, raw)
+	default:
+		return fmt.Errorf("unsupported kind: %s", field.Kind())
+	}
+}
+
+func isScanner(field reflect.Value) bool {
+	if field.Kind() == reflect.Ptr && !field.IsNil() {
+		return field.Type().Implements(scannerT)
+	}
+	if field.CanAddr() {
+		return field.Addr().Type().Implements(scannerT)
+	}
+	return false
+}
+
+func assignWithScanner(field reflect.Value, raw any) error {
+	val := toScalar(raw)
+	if field.Kind() == reflect.Ptr {
+		if field.IsNil() {
+			field.Set(reflect.New(field.Type().Elem()))
+		}
+		return field.Interface().(sql.Scanner).Scan(val)
+	}
+	return field.Addr().Interface().(sql.Scanner).Scan(val)
+}
+
+func assignInt(field reflect.Value, raw any) error {
+	scalar := toScalar(raw)
+
+	switch v := scalar.(type) {
+	case int64:
+		field.SetInt(v)
+	case float64:
+		field.SetInt(int64(v))
+	case string:
+		i, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
 			return err
 		}
 		field.SetInt(i)
+	default:
+		return fmt.Errorf("cannot assign %T to int", scalar)
+	}
+	return nil
+}
 
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		u, err := strconv.ParseUint(str, 10, 64)
+func assignUint(field reflect.Value, raw any) error {
+	scalar := toScalar(raw)
+
+	switch v := scalar.(type) {
+	case int64:
+		field.SetUint(uint64(v))
+	case float64:
+		field.SetUint(uint64(v))
+	case string:
+		u, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
 			return err
 		}
 		field.SetUint(u)
+	default:
+		return fmt.Errorf("cannot assign %T to uint", scalar)
+	}
+	return nil
+}
 
-	case reflect.Float32, reflect.Float64:
-		f, err := strconv.ParseFloat(str, 64)
+func assignFloat(field reflect.Value, raw any) error {
+	scalar := toScalar(raw)
+
+	switch v := scalar.(type) {
+	case float64:
+		field.SetFloat(v)
+	case int64:
+		field.SetFloat(float64(v))
+	case string:
+		f, err := strconv.ParseFloat(v, 64)
 		if err != nil {
 			return err
 		}
 		field.SetFloat(f)
+	default:
+		return fmt.Errorf("cannot assign %T to float", scalar)
+	}
+	return nil
+}
 
-	case reflect.Bool:
-		field.SetBool(str == "1" || strings.EqualFold(str, "true"))
+func assignBool(field reflect.Value, raw any) error {
+	scalar := toScalar(raw)
 
-	case reflect.Struct:
-		if field.Type() == reflect.TypeOf(time.Time{}) {
-			for _, layout := range []string{
-				"2006-01-02 15:04:05",
-				"2006-01-02T15:04:05Z",
-				"2006-01-02",
-				time.RFC3339,
-			} {
-				if t, err := time.ParseInLocation(layout, str, time.Local); err == nil {
-					field.Set(reflect.ValueOf(t))
-					return nil
-				}
-			}
-			return ErrParseTimeFailed.Render(str)
+	switch v := scalar.(type) {
+	case bool:
+		field.SetBool(v)
+	case int64:
+		field.SetBool(v != 0)
+	case string:
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return err
 		}
-		fallthrough
+		field.SetBool(b)
+	default:
+		return fmt.Errorf("cannot assign %T to bool", scalar)
+	}
+	return nil
+}
+
+func assignString(field reflect.Value, raw any) error {
+	field.SetString(fmt.Sprint(toScalar(raw)))
+	return nil
+}
+
+func assignSlice(field reflect.Value, raw any) error {
+	switch field.Type().Elem().Kind() {
+	case reflect.String:
+		var result []string
+		if err := pq.Array(&result).Scan(raw); err != nil {
+			return err
+		}
+		field.Set(reflect.ValueOf(result))
+		return nil
+
+	case reflect.Int:
+		var result []int64
+		if err := pq.Array(&result).Scan(raw); err != nil {
+			return err
+		}
+		slice := reflect.MakeSlice(field.Type(), len(result), len(result))
+		for i, v := range result {
+			slice.Index(i).SetInt(v)
+		}
+		field.Set(slice)
+		return nil
+
+	case reflect.Float64:
+		var result []float64
+		if err := pq.Array(&result).Scan(raw); err != nil {
+			return err
+		}
+		field.Set(reflect.ValueOf(result))
+		return nil
 
 	default:
-		return ErrUnsupportedKind.Render(field.Kind().String())
+		return fmt.Errorf("unsupported slice element type: %s", field.Type().Elem().Kind())
+	}
+}
+
+func assignJSON(field reflect.Value, raw any) error {
+	rawStr := ""
+	switch v := raw.(type) {
+	case []byte:
+		rawStr = string(v)
+	case sql.RawBytes:
+		rawStr = string(v)
+	case string:
+		rawStr = v
+	default:
+		return fmt.Errorf("cannot assign %T to struct", raw)
 	}
 
+	if strings.TrimSpace(rawStr) == "" {
+		field.Set(reflect.Zero(field.Type()))
+		return nil
+	}
+
+	ptr := reflect.New(field.Type()).Interface()
+	if err := json.Unmarshal([]byte(rawStr), ptr); err != nil {
+		return err
+	}
+	field.Set(reflect.ValueOf(ptr).Elem())
 	return nil
+}
+
+func assignTime(field reflect.Value, raw any) error {
+	scalar := toScalar(raw)
+
+	switch v := scalar.(type) {
+	case time.Time:
+		field.Set(reflect.ValueOf(v))
+		return nil
+	case string:
+		for _, layout := range []string{
+			"2006-01-02 15:04:05",
+			"2006-01-02T15:04:05Z",
+			"2006-01-02",
+			time.RFC3339,
+		} {
+			if t, err := time.ParseInLocation(layout, v, time.Local); err == nil {
+				field.Set(reflect.ValueOf(t))
+				return nil
+			}
+		}
+		return fmt.Errorf("cannot parse time from string: %q", v)
+	default:
+		return fmt.Errorf("cannot assign %T to time.Time", scalar)
+	}
 }
 
 /* toScalar: aman untuk sql.RawBytes / []byte */

@@ -112,3 +112,8 @@ func (g *GormAdapter) First(dest any) (err error) {
 
 	return err
 }
+
+func (g *GormAdapter) Driver() driverFlavor {
+	sqlDB, _ := g.db.DB()
+	return detectFlavor(sqlDB)
+}

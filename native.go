@@ -251,6 +251,10 @@ func (q *SqlQueryAdapter) Count(target *int64) error {
 	return q.db.QueryRowContext(q.ctx, sqlStr, args...).Scan(target)
 }
 
+func (g *SqlQueryAdapter) Driver() driverFlavor {
+	return g.flavor
+}
+
 func normalize(col string) string {
 	col = strings.Trim(col, "`\"")
 	if idx := strings.LastIndex(col, "."); idx != -1 {

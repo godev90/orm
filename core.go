@@ -28,6 +28,7 @@ type (
 		Or(query any, args ...any) QueryAdapter
 		Select(selections []string) QueryAdapter
 		Clone() QueryAdapter
+		Driver() driverFlavor
 	}
 
 	ScopeFunc func(QueryAdapter) QueryAdapter

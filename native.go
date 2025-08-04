@@ -42,8 +42,8 @@ type (
 )
 
 const (
-	flavorMySQL driverFlavor = iota
-	flavorPostgres
+	FlavorMySQL driverFlavor = iota
+	FlavorPostgres
 )
 
 var (
@@ -105,9 +105,9 @@ func detectFlavor(db *sql.DB) driverFlavor {
 	t := strings.TrimPrefix(reflect.TypeOf(db.Driver()).String(), "*")
 	switch {
 	case strings.Contains(t, "pq"), strings.Contains(t, "pgx"), strings.Contains(t, "postgres"), strings.Contains(t, "stdlib"):
-		return flavorPostgres
+		return FlavorPostgres
 	default:
-		return flavorMySQL
+		return FlavorMySQL
 	}
 }
 
@@ -938,7 +938,7 @@ func (q *SqlTransactionAdapter) Create(src Tabler) error {
 		strings.Join(placeholders, ", "),
 	)
 
-	if pkFieldIndex >= 0 && q.flavor == flavorPostgres {
+	if pkFieldIndex >= 0 && q.flavor == FlavorPostgres {
 		query += fmt.Sprintf(" RETURNING %s", pkColumn)
 	}
 
@@ -949,12 +949,12 @@ func (q *SqlTransactionAdapter) Create(src Tabler) error {
 		}()
 	}
 
-	if q.flavor == flavorPostgres {
+	if q.flavor == FlavorPostgres {
 		query = convertPostgresPlaceholder(query)
 	}
 
 	var err error
-	if pkFieldIndex >= 0 && q.flavor == flavorPostgres {
+	if pkFieldIndex >= 0 && q.flavor == FlavorPostgres {
 		err = q.tx.QueryRowContext(q.ctx, query, args...).Scan(val.Field(pkFieldIndex).Addr().Interface())
 	} else {
 		result, execErr := q.tx.ExecContext(q.ctx, query, args...)
@@ -1037,7 +1037,7 @@ func (q *SqlTransactionAdapter) Patch(src Tabler, fields map[string]any) error {
 		}()
 	}
 
-	if q.flavor == flavorPostgres {
+	if q.flavor == FlavorPostgres {
 		query = convertPostgresPlaceholder(query)
 	}
 
@@ -1106,7 +1106,7 @@ func (q *SqlTransactionAdapter) Update(src Tabler) error {
 		}()
 	}
 
-	if q.flavor == flavorPostgres {
+	if q.flavor == FlavorPostgres {
 		query = convertPostgresPlaceholder(query)
 	}
 
@@ -1201,7 +1201,7 @@ func (q *SqlTransactionAdapter) BulkInsert(models []Tabler) error {
 		}()
 	}
 
-	if q.flavor == flavorPostgres {
+	if q.flavor == FlavorPostgres {
 		query = convertPostgresPlaceholder(query)
 	}
 
@@ -1287,7 +1287,7 @@ func interpolate(sqlStr string, args []any, flavor driverFlavor) string {
 
 	switch flavor {
 
-	case flavorPostgres:
+	case FlavorPostgres:
 		re := regexp.MustCompile(`\$\d+`)
 		out.WriteString(re.ReplaceAllStringFunc(sqlStr, func(_ string) string {
 			if argIdx >= len(args) {
@@ -1361,7 +1361,7 @@ func (q *SqlQueryAdapter) build(count bool) (string, []any) {
 	}
 
 	sqlStr := sb.String()
-	if q.flavor == flavorPostgres {
+	if q.flavor == FlavorPostgres {
 		// replace ? with $n
 		var idx int
 		var b strings.Builder

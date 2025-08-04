@@ -233,9 +233,9 @@ func (q *SqlQueryAdapter) Scopes(fs ...ScopeFunc) QueryAdapter {
 		return q
 	}
 
-	tmp := q.clone()
-	tmp.wheres, tmp.whereArgs = nil, nil
-	tmp.orWheres, tmp.orArgs = nil, nil
+	tmp := q.Clone()
+	// tmp.wheres, tmp.whereArgs = nil, nil
+	// tmp.orWheres, tmp.orArgs = nil, nil
 
 	tmp = applyScopes(tmp, fs...).(*SqlQueryAdapter)
 
@@ -243,7 +243,7 @@ func (q *SqlQueryAdapter) Scopes(fs ...ScopeFunc) QueryAdapter {
 }
 
 func (q *SqlQueryAdapter) Clone() QueryAdapter {
-	return q.clone()
+	return q.UseModel(q.model)
 }
 
 func (q *SqlQueryAdapter) Count(target *int64) error {

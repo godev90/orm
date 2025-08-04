@@ -850,20 +850,31 @@ func (q *SqlQueryAdapter) First(dest any) error {
 type SqlTransactionAdapter struct {
 	ctx    context.Context
 	tx     *sql.Tx
-	table  string
 	flavor driverFlavor
 }
 
-func (q *SqlQueryAdapter) Begin() (*SqlTransactionAdapter, error) {
-	tx, err := q.db.BeginTx(q.ctx, nil)
+// func (q *SqlQueryAdapter) Begin() (*SqlTransactionAdapter, error) {
+// 	tx, err := q.db.BeginTx(q.ctx, nil)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return &SqlTransactionAdapter{
+// 		ctx:    q.ctx,
+// 		tx:     tx,
+// 		flavor: q.flavor,
+// 	}, nil
+// }
+
+func NewSqlTransactionAdapter(ctx context.Context, db *sql.DB) (*SqlTransactionAdapter, error) {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
+
 	return &SqlTransactionAdapter{
-		ctx:    q.ctx,
+		ctx:    ctx,
 		tx:     tx,
-		table:  q.table,
-		flavor: q.flavor,
+		flavor: detectFlavor(db),
 	}, nil
 }
 
@@ -875,8 +886,8 @@ func (q *SqlTransactionAdapter) Rollback() error {
 	return q.tx.Rollback()
 }
 
-func (q *SqlTransactionAdapter) Create(model any) error {
-	val := reflect.ValueOf(model)
+func (q *SqlTransactionAdapter) Create(src Tabler) error {
+	val := reflect.ValueOf(src)
 	if val.Kind() != reflect.Ptr || val.IsNil() {
 		return ErrNilPointer
 	}
@@ -889,6 +900,8 @@ func (q *SqlTransactionAdapter) Create(model any) error {
 	cols := []string{}
 	placeholders := []string{}
 	args := []any{}
+	var pkFieldIndex int = -1
+	var pkColumn string
 
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
@@ -905,6 +918,8 @@ func (q *SqlTransactionAdapter) Create(model any) error {
 		fieldVal := val.Field(i)
 		// Skip zero value on auto increment ID (e.g., primary key)
 		if pk := strings.Contains(field.Tag.Get("sql"), "primaryKey"); pk {
+			pkFieldIndex = i
+			pkColumn = col
 			continue
 		}
 
@@ -913,34 +928,45 @@ func (q *SqlTransactionAdapter) Create(model any) error {
 		args = append(args, fieldVal.Interface())
 	}
 
-	table := q.table
-	if table == "" {
-		if tabler, ok := model.(Tabler); ok {
-			table = tabler.TableName()
-		} else {
-			return ErrTablerNotImplemented
-		}
-	}
-
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		table,
+		src.TableName(),
 		strings.Join(cols, ", "),
 		strings.Join(placeholders, ", "),
 	)
 
+	if pkFieldIndex >= 0 && q.flavor == flavorPostgres {
+		query += fmt.Sprintf(" RETURNING %s", pkColumn)
+	}
+
 	if debug {
 		start := time.Now()
 		defer func() {
-			log.Printf("[sql] %s | %s\n", interpolate(query, args, q.flavor), time.Since(start))
+			log.Printf("[sql] %s | %s\n", logQueryWithValues(query, args), time.Since(start))
 		}()
 	}
 
-	_, err := q.tx.ExecContext(q.ctx, query, args...)
+	if q.flavor == flavorPostgres {
+		query = convertPostgresPlaceholder(query)
+	}
+
+	var err error
+	if pkFieldIndex >= 0 && q.flavor == flavorPostgres {
+		err = q.tx.QueryRowContext(q.ctx, query, args...).Scan(val.Field(pkFieldIndex).Addr().Interface())
+	} else {
+		result, execErr := q.tx.ExecContext(q.ctx, query, args...)
+		err = execErr
+		if execErr == nil && pkFieldIndex >= 0 {
+			if lastID, idErr := result.LastInsertId(); idErr == nil {
+				val.Field(pkFieldIndex).SetInt(lastID)
+			}
+		}
+	}
+
 	return err
 }
 
-func (q *SqlTransactionAdapter) Patch(model any, fields map[string]any) error {
-	val := reflect.ValueOf(model)
+func (q *SqlTransactionAdapter) Patch(src Tabler, fields map[string]any) error {
+	val := reflect.ValueOf(src)
 	if val.Kind() != reflect.Ptr || val.IsNil() {
 		return ErrNilPointer
 	}
@@ -994,17 +1020,8 @@ func (q *SqlTransactionAdapter) Patch(model any, fields map[string]any) error {
 	}
 	args = append(args, pkVal)
 
-	table := q.table
-	if table == "" {
-		if tabler, ok := model.(Tabler); ok {
-			table = tabler.TableName()
-		} else {
-			return ErrTablerNotImplemented
-		}
-	}
-
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ?",
-		table,
+		src.TableName(),
 		strings.Join(cols, ", "),
 		pkCol,
 	)
@@ -1012,16 +1029,20 @@ func (q *SqlTransactionAdapter) Patch(model any, fields map[string]any) error {
 	if debug {
 		start := time.Now()
 		defer func() {
-			log.Printf("[sql] %s | %s\n", interpolate(query, args, q.flavor), time.Since(start))
+			log.Printf("[sql] %s | %s\n", logQueryWithValues(query, args), time.Since(start))
 		}()
+	}
+
+	if q.flavor == flavorPostgres {
+		query = convertPostgresPlaceholder(query)
 	}
 
 	_, err := q.tx.ExecContext(q.ctx, query, args...)
 	return err
 }
 
-func (q *SqlTransactionAdapter) Update(model any) error {
-	val := reflect.ValueOf(model)
+func (q *SqlTransactionAdapter) Update(src Tabler) error {
+	val := reflect.ValueOf(src)
 	if val.Kind() != reflect.Ptr || val.IsNil() {
 		return ErrNilPointer
 	}
@@ -1068,17 +1089,8 @@ func (q *SqlTransactionAdapter) Update(model any) error {
 
 	args = append(args, pkVal)
 
-	table := q.table
-	if table == "" {
-		if tabler, ok := model.(Tabler); ok {
-			table = tabler.TableName()
-		} else {
-			return ErrTablerNotImplemented
-		}
-	}
-
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ?",
-		table,
+		src.TableName(),
 		strings.Join(cols, ", "),
 		pkCol,
 	)
@@ -1086,12 +1098,172 @@ func (q *SqlTransactionAdapter) Update(model any) error {
 	if debug {
 		start := time.Now()
 		defer func() {
-			log.Printf("[sql] %s | %s\n", interpolate(query, args, q.flavor), time.Since(start))
+			log.Printf("[sql] %s | %s\n", logQueryWithValues(query, args), time.Since(start))
 		}()
+	}
+
+	if q.flavor == flavorPostgres {
+		query = convertPostgresPlaceholder(query)
 	}
 
 	_, err := q.tx.ExecContext(q.ctx, query, args...)
 	return err
+}
+
+func (q *SqlTransactionAdapter) BulkInsert(models []Tabler) error {
+	if len(models) == 0 {
+		return nil
+	}
+
+	first := models[0]
+	val := reflect.ValueOf(first)
+	if val.Kind() != reflect.Ptr || val.IsNil() {
+		return ErrNilPointer
+	}
+	val = val.Elem()
+	if val.Kind() != reflect.Struct {
+		return ErrUnsupported
+	}
+
+	typ := val.Type()
+	cols := []string{}
+	fieldIndexes := []int{}
+
+	// Determine columns and indexes once from first struct
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+
+		if field.PkgPath != "" || field.Tag.Get("sql") == "-" {
+			continue
+		}
+
+		if strings.Contains(field.Tag.Get("sql"), "primaryKey") {
+			continue
+		}
+
+		col, _ := parseColumnTag(field)
+		if col == "" {
+			col = toSnake(field.Name)
+		}
+		cols = append(cols, col)
+		fieldIndexes = append(fieldIndexes, i)
+	}
+
+	if len(cols) == 0 {
+		return fmt.Errorf("orm: no insertable fields found")
+	}
+
+	table := first.TableName()
+	// if table == "" {
+	// 	if tabler, ok := first.(Tabler); ok {
+
+	// 	} else {
+	// 		return ErrTablerNotImplemented
+	// 	}
+	// }
+
+	placeholderRows := []string{}
+	args := []any{}
+
+	for _, model := range models {
+		v := reflect.ValueOf(model)
+		if v.Kind() != reflect.Ptr || v.IsNil() {
+			return ErrNilPointer
+		}
+		v = v.Elem()
+		if v.Kind() != reflect.Struct {
+			return ErrUnsupported
+		}
+
+		ph := []string{}
+		for _, idx := range fieldIndexes {
+			fieldVal := v.Field(idx)
+			ph = append(ph, "?")
+			args = append(args, fieldVal.Interface())
+		}
+		placeholderRows = append(placeholderRows, fmt.Sprintf("(%s)", strings.Join(ph, ", ")))
+	}
+
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
+		table,
+		strings.Join(cols, ", "),
+		strings.Join(placeholderRows, ", "),
+	)
+
+	if debug {
+		start := time.Now()
+		defer func() {
+			log.Printf("[sql] %s | %s\n", logQueryWithValues(query, args), time.Since(start))
+		}()
+	}
+
+	if q.flavor == flavorPostgres {
+		query = convertPostgresPlaceholder(query)
+	}
+
+	_, err := q.tx.ExecContext(q.ctx, query, args...)
+	return err
+}
+
+func logQueryWithValues(query string, args []any) string {
+	var sb strings.Builder
+	argIdx := 0
+
+	for i := 0; i < len(query); i++ {
+		if query[i] == '?' && argIdx < len(args) {
+			sb.WriteString(formatSQLValue(args[argIdx]))
+			argIdx++
+		} else {
+			sb.WriteByte(query[i])
+		}
+	}
+	return sb.String()
+}
+
+func formatSQLValue(v any) string {
+	switch val := v.(type) {
+	case nil:
+		return "NULL"
+	case *int, *int64, *int32:
+		if reflect.ValueOf(val).IsNil() {
+			return "NULL"
+		}
+		return fmt.Sprintf("%v", reflect.ValueOf(val).Elem())
+	case *string:
+		if val == nil {
+			return "NULL"
+		}
+		return "'" + strings.ReplaceAll(*val, "'", "''") + "'"
+	case string:
+		return "'" + strings.ReplaceAll(val, "'", "''") + "'"
+	case time.Time:
+		return "'" + val.Format("2006-01-02 15:04:05") + "'"
+	case fmt.Stringer:
+		return "'" + strings.ReplaceAll(val.String(), "'", "''") + "'"
+	default:
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Ptr {
+			if rv.IsNil() {
+				return "NULL"
+			}
+			return formatSQLValue(rv.Elem().Interface())
+		}
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func convertPostgresPlaceholder(query string) string {
+	var result strings.Builder
+	argIndex := 1
+	for i := 0; i < len(query); i++ {
+		if query[i] == '?' {
+			result.WriteString(fmt.Sprintf("$%d", argIndex))
+			argIndex++
+		} else {
+			result.WriteByte(query[i])
+		}
+	}
+	return result.String()
 }
 
 func interpolate(sqlStr string, args []any, flavor driverFlavor) string {

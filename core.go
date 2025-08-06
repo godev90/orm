@@ -27,6 +27,8 @@ type (
 		Where(query any, args ...any) QueryAdapter
 		Or(query any, args ...any) QueryAdapter
 		Select(selections []string) QueryAdapter
+		GroupBy(groupbys []string) QueryAdapter
+		Having(havings []string, args ...any) QueryAdapter
 		Clone() QueryAdapter
 		Driver() driverFlavor
 	}

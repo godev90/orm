@@ -3,6 +3,7 @@ package orm
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -48,6 +49,14 @@ func (g *GormAdapter) Or(query any, args ...any) QueryAdapter {
 
 func (g *GormAdapter) Select(fields []string) QueryAdapter {
 	return &GormAdapter{db: g.db.Select(fields), model: g.model}
+}
+
+func (g *GormAdapter) GroupBy(fields []string) QueryAdapter {
+	return &GormAdapter{db: g.db.Group(strings.Join(fields, ",")), model: g.model}
+}
+
+func (g *GormAdapter) Having(fields []string, args ...any) QueryAdapter {
+	return &GormAdapter{db: g.db.Having(strings.Join(fields, ","), args...), model: g.model}
 }
 
 func (g *GormAdapter) Limit(limit int) QueryAdapter {

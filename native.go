@@ -24,18 +24,21 @@ type (
 		ctx    context.Context
 		flavor driverFlavor
 
-		table     string
-		fields    []string
-		joins     []string
-		joinArgs  []any
-		scopes    []ScopeFunc
-		wheres    []string
-		whereArgs []any
-		orWheres  []string
-		orArgs    []any
-		orderBy   string
-		limit     *int
-		offset    *int
+		table      string
+		fields     []string
+		groups     []string
+		havings    []string
+		havingArgs []any
+		joins      []string
+		joinArgs   []any
+		scopes     []ScopeFunc
+		wheres     []string
+		whereArgs  []any
+		orWheres   []string
+		orArgs     []any
+		orderBy    string
+		limit      *int
+		offset     *int
 
 		model Tabler
 	}
@@ -206,6 +209,22 @@ func (q *SqlQueryAdapter) Select(sel []string) QueryAdapter {
 	cp := q.clone()
 	if len(sel) > 0 {
 		cp.fields = sel
+	}
+	return cp
+}
+
+func (q *SqlQueryAdapter) GroupBy(cols []string) QueryAdapter {
+	cp := q.clone()
+	if len(cols) > 0 {
+		cp.groups = cols
+	}
+	return cp
+}
+
+func (q *SqlQueryAdapter) Having(cols []string, args ...any) QueryAdapter {
+	cp := q.clone()
+	if len(cols) > 0 {
+		cp.havings = cols
 	}
 	return cp
 }
@@ -1347,6 +1366,18 @@ func (q *SqlQueryAdapter) build(count bool) (string, []any) {
 			args = append(args, q.orArgs...)
 		}
 	}
+
+	if len(q.groups) > 0 && !count {
+		sb.WriteString(" GROUP BY ")
+		sb.WriteString(strings.Join(q.groups, ", "))
+	}
+
+	if len(q.havings) > 0 && !count {
+		sb.WriteString(" HAVING ")
+		sb.WriteString(strings.Join(q.havings, ", "))
+		args = append(args, q.havingArgs...)
+	}
+
 	if q.orderBy != "" && !count {
 		sb.WriteString(" ORDER BY ")
 		sb.WriteString(q.orderBy)

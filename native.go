@@ -555,6 +555,11 @@ func assignString(field reflect.Value, raw any) error {
 }
 
 func assignSlice(field reflect.Value, raw any) error {
+	switch v := raw.(type) {
+	case sql.RawBytes:
+		raw = []byte(v) // convert before scanning
+	}
+
 	switch field.Type().Elem().Kind() {
 	case reflect.String:
 		var result []string

@@ -82,7 +82,7 @@ var (
 		Messages: []faults.LangPackage{
 			{
 				Tag:     faults.English,
-				Message: "orm: cannot parse time %q",
+				Message: "orm: cannot parse time [%q]",
 			},
 		},
 	})
@@ -93,7 +93,7 @@ var (
 		Messages: []faults.LangPackage{
 			{
 				Tag:     faults.English,
-				Message: "orm: unsupported kind %s",
+				Message: "orm: unsupported kind [%s]",
 			},
 		},
 	})
@@ -101,6 +101,17 @@ var (
 	errNotFound = fmt.Errorf("orm: record not found")
 	ErrNotFound = faults.New(errNotFound, &faults.ErrAttr{
 		Code: http.StatusNotFound,
+	})
+
+	errParseFailed = fmt.Errorf("orm: parse failed")
+	ErrParseFailed = faults.New(errParseFailed, &faults.ErrAttr{
+		Code: http.StatusInternalServerError,
+		Messages: []faults.LangPackage{
+			{
+				Tag:     faults.English,
+				Message: "orm: cannot parse [%T] to [%s]",
+			},
+		},
 	})
 )
 
@@ -186,8 +197,34 @@ func (q *SqlQueryAdapter) Where(cond any, args ...any) QueryAdapter {
 		return cp
 	}
 
-	cp.wheres = append(cp.wheres, toString(cond))
-	cp.whereArgs = append(cp.whereArgs, args...)
+	condStr := toString(cond)
+	finalArgs := make([]any, 0, len(args))
+
+	for _, arg := range args {
+		val := reflect.ValueOf(arg)
+		if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
+			// Handle slice/array
+			if val.Len() == 0 {
+				// Replace with something always false
+				condStr = "1=0"
+				continue
+			}
+
+			placeholders := make([]string, val.Len())
+			for i := 0; i < val.Len(); i++ {
+				placeholders[i] = "?"
+				finalArgs = append(finalArgs, val.Index(i).Interface())
+			}
+
+			// Replace only the first "?" occurrence with expanded list
+			condStr = strings.Replace(condStr, "?", "("+strings.Join(placeholders, ", ")+")", 1)
+		} else {
+			finalArgs = append(finalArgs, arg)
+		}
+	}
+
+	cp.wheres = append(cp.wheres, condStr)
+	cp.whereArgs = append(cp.whereArgs, finalArgs...)
 	return cp
 }
 
@@ -299,117 +336,6 @@ func isEmptyRaw(v any) bool {
 
 var scannerT = reflect.TypeOf((*sql.Scanner)(nil)).Elem()
 
-// func convertAssign(field reflect.Value, raw any) error {
-// 	if raw == nil {
-// 		field.Set(reflect.Zero(field.Type()))
-// 		return nil
-// 	}
-
-// 	isPtr := field.Kind() == reflect.Ptr
-
-// 	if isPtr && field.Type().Implements(scannerT) {
-// 		if isEmptyRaw(raw) {
-// 			field.Set(reflect.Zero(field.Type()))
-// 			return nil
-// 		}
-// 		if field.IsNil() {
-// 			field.Set(reflect.New(field.Type().Elem()))
-// 		}
-// 		return field.Interface().(sql.Scanner).Scan(toScalar(raw))
-// 	}
-
-// 	if field.CanAddr() && field.Addr().Type().Implements(scannerT) {
-// 		if isEmptyRaw(raw) {
-// 			// value non-pointer di-zero-kan
-// 			field.Set(reflect.Zero(field.Type()))
-// 			return nil
-// 		}
-// 		return field.Addr().Interface().(sql.Scanner).Scan(toScalar(raw))
-// 	}
-
-// 	if isPtr {
-// 		if isEmptyRaw(raw) {
-// 			field.Set(reflect.Zero(field.Type()))
-// 			return nil
-// 		}
-// 		field.Set(reflect.New(field.Type().Elem()))
-// 		return convertAssign(field.Elem(), raw)
-// 	}
-
-// 	if tm, ok := raw.(time.Time); ok && field.Type() == reflect.TypeOf(time.Time{}) {
-// 		field.Set(reflect.ValueOf(tm))
-// 		return nil
-// 	}
-
-// 	var str string
-// 	switch v := raw.(type) {
-// 	case []byte:
-// 		str = string(v)
-// 	case sql.RawBytes:
-// 		str = string(v)
-// 	case string:
-// 		str = v
-// 	default:
-// 		return ErrUnsupportedRaw.Render(raw)
-// 	}
-// 	if strings.TrimSpace(str) == "" {
-// 		field.Set(reflect.Zero(field.Type()))
-// 		return nil
-// 	}
-
-// 	// 6. set sesuai kind (string/int/uint/float/bool/time)
-// 	switch field.Kind() {
-// 	case reflect.String:
-// 		field.SetString(str)
-
-// 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-// 		i, err := strconv.ParseInt(str, 10, 64)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		field.SetInt(i)
-
-// 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-// 		u, err := strconv.ParseUint(str, 10, 64)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		field.SetUint(u)
-
-// 	case reflect.Float32, reflect.Float64:
-// 		f, err := strconv.ParseFloat(str, 64)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		field.SetFloat(f)
-
-// 	case reflect.Bool:
-// 		field.SetBool(str == "1" || strings.EqualFold(str, "true"))
-
-// 	case reflect.Struct:
-// 		if field.Type() == reflect.TypeOf(time.Time{}) {
-// 			for _, layout := range []string{
-// 				"2006-01-02 15:04:05",
-// 				"2006-01-02T15:04:05Z",
-// 				"2006-01-02",
-// 				time.RFC3339,
-// 			} {
-// 				if t, err := time.ParseInLocation(layout, str, time.Local); err == nil {
-// 					field.Set(reflect.ValueOf(t))
-// 					return nil
-// 				}
-// 			}
-// 			return ErrParseTimeFailed.Render(str)
-// 		}
-// 		fallthrough
-
-// 	default:
-// 		return ErrUnsupportedKind.Render(field.Kind().String())
-// 	}
-
-// 	return nil
-// }
-
 func convertAssign(field reflect.Value, raw any) error {
 	if raw == nil || isEmptyRaw(raw) {
 		field.Set(reflect.Zero(field.Type()))
@@ -444,7 +370,7 @@ func convertAssign(field reflect.Value, raw any) error {
 	case reflect.Slice:
 		return assignSlice(field, raw)
 	default:
-		return fmt.Errorf("unsupported kind: %s", field.Kind())
+		return ErrUnsupportedKind.Render(field.Kind()) //fmt.Errorf("unsupported kind: %s", field.Kind())
 	}
 }
 
@@ -484,7 +410,7 @@ func assignInt(field reflect.Value, raw any) error {
 		}
 		field.SetInt(i)
 	default:
-		return fmt.Errorf("cannot assign %T to int", scalar)
+		return ErrParseFailed.Render(scalar, "int") //fmt.Errorf("cannot assign %T to int", scalar)
 	}
 	return nil
 }
@@ -504,7 +430,7 @@ func assignUint(field reflect.Value, raw any) error {
 		}
 		field.SetUint(u)
 	default:
-		return fmt.Errorf("cannot assign %T to uint", scalar)
+		return ErrParseFailed.Render(scalar, "uint")
 	}
 	return nil
 }
@@ -524,7 +450,7 @@ func assignFloat(field reflect.Value, raw any) error {
 		}
 		field.SetFloat(f)
 	default:
-		return fmt.Errorf("cannot assign %T to float", scalar)
+		return ErrParseFailed.Render(scalar, "float")
 	}
 	return nil
 }
@@ -544,7 +470,7 @@ func assignBool(field reflect.Value, raw any) error {
 		}
 		field.SetBool(b)
 	default:
-		return fmt.Errorf("cannot assign %T to bool", scalar)
+		return ErrParseFailed.Render(scalar, "boolean")
 	}
 	return nil
 }
@@ -604,7 +530,7 @@ func assignJSON(field reflect.Value, raw any) error {
 	case string:
 		rawStr = v
 	default:
-		return fmt.Errorf("cannot assign %T to struct", raw)
+		return ErrParseFailed.Render(raw, "struct")
 	}
 
 	if strings.TrimSpace(rawStr) == "" {
@@ -641,7 +567,7 @@ func assignTime(field reflect.Value, raw any) error {
 		}
 		return fmt.Errorf("cannot parse time from string: %q", v)
 	default:
-		return fmt.Errorf("cannot assign %T to time.Time", scalar)
+		return ErrParseFailed.Render(scalar, "time")
 	}
 }
 
@@ -904,6 +830,10 @@ func NewSqlTransactionAdapter(ctx context.Context, db *sql.DB) (*SqlTransactionA
 		tx:     tx,
 		flavor: detectFlavor(db),
 	}, nil
+}
+
+func (q *SqlTransactionAdapter) Tx() *sql.Tx {
+	return q.tx
 }
 
 func (q *SqlTransactionAdapter) Commit() error {

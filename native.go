@@ -47,6 +47,11 @@ type (
 const (
 	FlavorMySQL driverFlavor = iota
 	FlavorPostgres
+
+	// Time format constants
+	defaultTimeFormat = "2006-01-02 15:04:05"
+	logSQLFormat      = "[sql] %s | %s\n"
+	columnPrefix      = "column:"
 )
 
 var (
@@ -236,6 +241,11 @@ func (q *SqlQueryAdapter) Or(cond any, args ...any) QueryAdapter {
 }
 
 func (q *SqlQueryAdapter) Join(joinClause string, args ...any) QueryAdapter {
+	// Automatically validate join clause for safety
+	if err := ValidateJoinClause(joinClause); err != nil {
+		// Return adapter unchanged if validation fails
+		return q
+	}
 	cp := q.clone()
 	cp.joins = append(cp.joins, joinClause)
 	cp.joinArgs = append(cp.joinArgs, args...)
@@ -243,25 +253,43 @@ func (q *SqlQueryAdapter) Join(joinClause string, args ...any) QueryAdapter {
 }
 
 func (q *SqlQueryAdapter) Select(sel []string) QueryAdapter {
+	// Automatically sanitize select fields for safety
+	sanitized, err := SanitizeSelectFields(sel)
+	if err != nil {
+		// Return adapter unchanged if sanitization fails
+		return q
+	}
 	cp := q.clone()
-	if len(sel) > 0 {
-		cp.fields = sel
+	if len(sanitized) > 0 {
+		cp.fields = sanitized
 	}
 	return cp
 }
 
 func (q *SqlQueryAdapter) GroupBy(cols []string) QueryAdapter {
+	// Automatically sanitize group by fields for safety
+	sanitized, err := SanitizeColumnNames(cols)
+	if err != nil {
+		// Return adapter unchanged if sanitization fails
+		return q
+	}
 	cp := q.clone()
-	if len(cols) > 0 {
-		cp.groups = cols
+	if len(sanitized) > 0 {
+		cp.groups = sanitized
 	}
 	return cp
 }
 
 func (q *SqlQueryAdapter) Having(cols []string, args ...any) QueryAdapter {
+	// Automatically validate having clauses for safety
+	if err := ValidateHavingClause(cols); err != nil {
+		// Return adapter unchanged if validation fails
+		return q
+	}
 	cp := q.clone()
 	if len(cols) > 0 {
 		cp.havings = cols
+		cp.havingArgs = append(cp.havingArgs, args...)
 	}
 	return cp
 }
@@ -279,6 +307,11 @@ func (q *SqlQueryAdapter) Offset(o int) QueryAdapter {
 }
 
 func (q *SqlQueryAdapter) Order(order string) QueryAdapter {
+	// Automatically validate order clause for safety
+	if err := ValidateOrderBy(order); err != nil {
+		// Return adapter unchanged if validation fails
+		return q
+	}
 	cp := q.clone()
 	cp.orderBy = order
 	return cp
@@ -309,6 +342,94 @@ func (q *SqlQueryAdapter) Count(target *int64) error {
 
 func (g *SqlQueryAdapter) Driver() driverFlavor {
 	return g.flavor
+}
+
+// Enhanced security methods implementation
+func (q *SqlQueryAdapter) SafeOrder(order string) QueryAdapter {
+	// Validate the order clause first
+	if err := ValidateOrderBy(order); err != nil {
+		// Return empty adapter or handle error appropriately
+		// For now, we'll ignore invalid order clauses
+		return q
+	}
+	return q.Order(order)
+}
+
+func (q *SqlQueryAdapter) SafeJoin(joinClause string, args ...any) QueryAdapter {
+	// Validate the join clause first
+	if err := ValidateJoinClause(joinClause); err != nil {
+		// Return empty adapter or handle error appropriately
+		return q
+	}
+	return q.Join(joinClause, args...)
+}
+
+func (q *SqlQueryAdapter) SafeSelect(selections []string) QueryAdapter {
+	// Sanitize the select fields
+	sanitized, err := SanitizeSelectFields(selections)
+	if err != nil {
+		// Return adapter with default fields on error
+		return q
+	}
+	return q.Select(sanitized)
+}
+
+func (q *SqlQueryAdapter) SafeGroupBy(groupbys []string) QueryAdapter {
+	// Sanitize the group by fields
+	sanitized, err := SanitizeColumnNames(groupbys)
+	if err != nil {
+		// Return adapter unchanged on error
+		return q
+	}
+	return q.GroupBy(sanitized)
+}
+
+func (q *SqlQueryAdapter) SafeHaving(havings []string, args ...any) QueryAdapter {
+	// Validate the having clauses
+	if err := ValidateHavingClause(havings); err != nil {
+		// Return adapter unchanged on error
+		return q
+	}
+	return q.Having(havings, args...)
+}
+
+// Unsafe methods for advanced users who want to bypass validation
+func (q *SqlQueryAdapter) UnsafeOrder(order string) QueryAdapter {
+	cp := q.clone()
+	cp.orderBy = order
+	return cp
+}
+
+func (q *SqlQueryAdapter) UnsafeJoin(joinClause string, args ...any) QueryAdapter {
+	cp := q.clone()
+	cp.joins = append(cp.joins, joinClause)
+	cp.joinArgs = append(cp.joinArgs, args...)
+	return cp
+}
+
+func (q *SqlQueryAdapter) UnsafeSelect(selections []string) QueryAdapter {
+	cp := q.clone()
+	if len(selections) > 0 {
+		cp.fields = selections
+	}
+	return cp
+}
+
+func (q *SqlQueryAdapter) UnsafeGroupBy(groupbys []string) QueryAdapter {
+	cp := q.clone()
+	if len(groupbys) > 0 {
+		cp.groups = groupbys
+	}
+	return cp
+}
+
+func (q *SqlQueryAdapter) UnsafeHaving(havings []string, args ...any) QueryAdapter {
+	cp := q.clone()
+	if len(havings) > 0 {
+		cp.havings = havings
+		cp.havingArgs = append(cp.havingArgs, args...)
+	}
+	return cp
 }
 
 func normalize(col string) string {
@@ -555,7 +676,7 @@ func assignTime(field reflect.Value, raw any) error {
 		return nil
 	case string:
 		for _, layout := range []string{
-			"2006-01-02 15:04:05",
+			defaultTimeFormat,
 			"2006-01-02T15:04:05Z",
 			"2006-01-02",
 			time.RFC3339,
@@ -600,7 +721,7 @@ func (q *SqlQueryAdapter) Scan(dest any) error {
 	if debug {
 		rendered := interpolate(sqlStr, args, q.flavor)
 		start := time.Now()
-		defer func() { log.Printf("[sql] %s | %s\n", rendered, time.Since(start)) }()
+		defer func() { log.Printf(logSQLFormat, rendered, time.Since(start)) }()
 	}
 
 	rows, err := q.db.QueryContext(q.ctx, sqlStr, args...)
@@ -733,7 +854,7 @@ func (q *SqlQueryAdapter) First(dest any) error {
 	if debug {
 		rendered := interpolate(sqlStr, args, q.flavor)
 		start := time.Now()
-		defer func() { log.Printf("[sql] %s | %s\n", rendered, time.Since(start)) }()
+		defer func() { log.Printf(logSQLFormat, rendered, time.Since(start)) }()
 	}
 
 	rows, err := q.db.QueryContext(q.ctx, sqlStr, args...)
@@ -899,7 +1020,7 @@ func (q *SqlTransactionAdapter) Create(src Tabler) error {
 	if debug {
 		start := time.Now()
 		defer func() {
-			log.Printf("[sql] %s | %s\n", logQueryWithValues(query, args), time.Since(start))
+			log.Printf(logSQLFormat, logQueryWithValues(query, args), time.Since(start))
 		}()
 	}
 
@@ -987,7 +1108,7 @@ func (q *SqlTransactionAdapter) Patch(src Tabler, fields map[string]any) error {
 	if debug {
 		start := time.Now()
 		defer func() {
-			log.Printf("[sql] %s | %s\n", logQueryWithValues(query, args), time.Since(start))
+			log.Printf(logSQLFormat, logQueryWithValues(query, args), time.Since(start))
 		}()
 	}
 
@@ -1056,7 +1177,7 @@ func (q *SqlTransactionAdapter) Update(src Tabler) error {
 	if debug {
 		start := time.Now()
 		defer func() {
-			log.Printf("[sql] %s | %s\n", logQueryWithValues(query, args), time.Since(start))
+			log.Printf(logSQLFormat, logQueryWithValues(query, args), time.Since(start))
 		}()
 	}
 
@@ -1151,7 +1272,7 @@ func (q *SqlTransactionAdapter) BulkInsert(models []Tabler) error {
 	if debug {
 		start := time.Now()
 		defer func() {
-			log.Printf("[sql] %s | %s\n", logQueryWithValues(query, args), time.Since(start))
+			log.Printf(logSQLFormat, logQueryWithValues(query, args), time.Since(start))
 		}()
 	}
 
@@ -1195,7 +1316,7 @@ func formatSQLValue(v any) string {
 	case string:
 		return "'" + strings.ReplaceAll(val, "'", "''") + "'"
 	case time.Time:
-		return "'" + val.Format("2006-01-02 15:04:05") + "'"
+		return "'" + val.Format(defaultTimeFormat) + "'"
 	case fmt.Stringer:
 		return "'" + strings.ReplaceAll(val.String(), "'", "''") + "'"
 	default:
@@ -1233,7 +1354,7 @@ func interpolate(sqlStr string, args []any, flavor driverFlavor) string {
 		case string:
 			return "'" + strings.ReplaceAll(v, "'", "''") + "'" // escape '
 		case time.Time:
-			return "'" + v.Format("2006-01-02 15:04:05") + "'"
+			return "'" + v.Format(defaultTimeFormat) + "'"
 		default:
 			return fmt.Sprint(v)
 		}
@@ -1368,10 +1489,10 @@ func buildFieldMap(t reflect.Type) map[string]int {
 
 func parseColumnTag(f reflect.StructField) (string, bool) {
 	extract := func(tag string) (string, bool) {
-		if strings.Contains(tag, "column:") {
+		if strings.Contains(tag, columnPrefix) {
 			for _, p := range strings.Split(tag, ";") {
-				if strings.HasPrefix(p, "column:") {
-					return strings.TrimPrefix(p, "column:"), strings.Contains(tag, "primaryKey")
+				if strings.HasPrefix(p, columnPrefix) {
+					return strings.TrimPrefix(p, columnPrefix), strings.Contains(tag, "primaryKey")
 				}
 			}
 		} else if !strings.Contains(tag, ":") {

@@ -48,14 +48,31 @@ func (g *GormAdapter) Or(query any, args ...any) QueryAdapter {
 }
 
 func (g *GormAdapter) Select(fields []string) QueryAdapter {
-	return &GormAdapter{db: g.db.Select(fields), model: g.model}
+	// Automatically sanitize select fields for safety
+	sanitized, err := SanitizeSelectFields(fields)
+	if err != nil {
+		// Return adapter unchanged if sanitization fails
+		return g
+	}
+	return &GormAdapter{db: g.db.Select(sanitized), model: g.model}
 }
 
 func (g *GormAdapter) GroupBy(fields []string) QueryAdapter {
-	return &GormAdapter{db: g.db.Group(strings.Join(fields, ",")), model: g.model}
+	// Automatically sanitize group by fields for safety
+	sanitized, err := SanitizeColumnNames(fields)
+	if err != nil {
+		// Return adapter unchanged if sanitization fails
+		return g
+	}
+	return &GormAdapter{db: g.db.Group(strings.Join(sanitized, ",")), model: g.model}
 }
 
 func (g *GormAdapter) Having(fields []string, args ...any) QueryAdapter {
+	// Automatically validate having clauses for safety
+	if err := ValidateHavingClause(fields); err != nil {
+		// Return adapter unchanged if validation fails
+		return g
+	}
 	return &GormAdapter{db: g.db.Having(strings.Join(fields, ","), args...), model: g.model}
 }
 
@@ -68,6 +85,11 @@ func (g *GormAdapter) Offset(offset int) QueryAdapter {
 }
 
 func (g *GormAdapter) Order(order string) QueryAdapter {
+	// Automatically validate order clause for safety
+	if err := ValidateOrderBy(order); err != nil {
+		// Return adapter unchanged if validation fails
+		return g
+	}
 	return &GormAdapter{db: g.db.Order(order), model: g.model}
 }
 
@@ -76,6 +98,11 @@ func (g *GormAdapter) Clone() QueryAdapter {
 }
 
 func (g *GormAdapter) Join(joinClause string, args ...any) QueryAdapter {
+	// Automatically validate join clause for safety
+	if err := ValidateJoinClause(joinClause); err != nil {
+		// Return adapter unchanged if validation fails
+		return g
+	}
 	return &GormAdapter{db: g.db.Joins(joinClause, args...), model: g.model}
 }
 
@@ -125,4 +152,73 @@ func (g *GormAdapter) First(dest any) (err error) {
 func (g *GormAdapter) Driver() driverFlavor {
 	sqlDB, _ := g.db.DB()
 	return detectFlavor(sqlDB)
+}
+
+// Enhanced security methods implementation
+func (g *GormAdapter) SafeOrder(order string) QueryAdapter {
+	// Validate the order clause first
+	if err := ValidateOrderBy(order); err != nil {
+		// Return adapter unchanged on validation error
+		return g
+	}
+	return g.Order(order)
+}
+
+func (g *GormAdapter) SafeJoin(joinClause string, args ...any) QueryAdapter {
+	// Validate the join clause first
+	if err := ValidateJoinClause(joinClause); err != nil {
+		// Return adapter unchanged on validation error
+		return g
+	}
+	return g.Join(joinClause, args...)
+}
+
+func (g *GormAdapter) SafeSelect(selections []string) QueryAdapter {
+	// Sanitize the select fields
+	sanitized, err := SanitizeSelectFields(selections)
+	if err != nil {
+		// Return adapter unchanged on error
+		return g
+	}
+	return g.Select(sanitized)
+}
+
+func (g *GormAdapter) SafeGroupBy(groupbys []string) QueryAdapter {
+	// Sanitize the group by fields
+	sanitized, err := SanitizeColumnNames(groupbys)
+	if err != nil {
+		// Return adapter unchanged on error
+		return g
+	}
+	return g.GroupBy(sanitized)
+}
+
+func (g *GormAdapter) SafeHaving(havings []string, args ...any) QueryAdapter {
+	// Validate the having clauses
+	if err := ValidateHavingClause(havings); err != nil {
+		// Return adapter unchanged on error
+		return g
+	}
+	return g.Having(havings, args...)
+}
+
+// Unsafe methods for advanced users who want to bypass validation
+func (g *GormAdapter) UnsafeOrder(order string) QueryAdapter {
+	return &GormAdapter{db: g.db.Order(order), model: g.model}
+}
+
+func (g *GormAdapter) UnsafeJoin(joinClause string, args ...any) QueryAdapter {
+	return &GormAdapter{db: g.db.Joins(joinClause, args...), model: g.model}
+}
+
+func (g *GormAdapter) UnsafeSelect(selections []string) QueryAdapter {
+	return &GormAdapter{db: g.db.Select(selections), model: g.model}
+}
+
+func (g *GormAdapter) UnsafeGroupBy(groupbys []string) QueryAdapter {
+	return &GormAdapter{db: g.db.Group(strings.Join(groupbys, ",")), model: g.model}
+}
+
+func (g *GormAdapter) UnsafeHaving(havings []string, args ...any) QueryAdapter {
+	return &GormAdapter{db: g.db.Having(strings.Join(havings, ","), args...), model: g.model}
 }

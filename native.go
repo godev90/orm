@@ -179,15 +179,63 @@ func (q *SqlQueryAdapter) Model() Tabler {
 func (q *SqlQueryAdapter) Where(cond any, args ...any) QueryAdapter {
 	cp := q.clone()
 
+	// if sub, ok := cond.(*SqlQueryAdapter); ok {
+	// 	var sb strings.Builder
+	// 	sb.WriteString("(")
+
+	// 	if len(sub.wheres) > 0 {
+	// 		sb.WriteString(strings.Join(sub.wheres, " AND "))
+	// 	}
+	// 	if len(sub.orWheres) > 0 {
+	// 		if len(sub.wheres) > 0 {
+	// 			sb.WriteString(" OR ")
+	// 		}
+	// 		sb.WriteString("(")
+	// 		sb.WriteString(strings.Join(sub.orWheres, " OR "))
+	// 		sb.WriteString(")")
+	// 	}
+	// 	sb.WriteString(")")
+
+	// 	cp.wheres = append(cp.wheres, sb.String())
+	// 	cp.whereArgs = append(cp.whereArgs, sub.whereArgs...)
+	// 	cp.whereArgs = append(cp.whereArgs, sub.orArgs...)
+	// 	return cp
+	// }
+
 	if sub, ok := cond.(*SqlQueryAdapter); ok {
+		// If sub was cloned from the same base, remove the common leading WHEREs
+		subWheres := append([]string(nil), sub.wheres...)
+		subWhereArgs := append([]any(nil), sub.whereArgs...)
+
+		if sub.model == q.model && len(q.wheres) > 0 && len(sub.wheres) >= len(q.wheres) {
+			common := 0
+			argsToDrop := 0
+			for i := 0; i < len(q.wheres) && i < len(sub.wheres); i++ {
+				if sub.wheres[i] == q.wheres[i] {
+					common++
+					argsToDrop += strings.Count(q.wheres[i], "?")
+				} else {
+					break
+				}
+			}
+			if common > 0 {
+				subWheres = sub.wheres[common:]
+				if argsToDrop <= len(sub.whereArgs) {
+					subWhereArgs = sub.whereArgs[argsToDrop:]
+				} else {
+					subWhereArgs = nil
+				}
+			}
+		}
+
 		var sb strings.Builder
 		sb.WriteString("(")
 
-		if len(sub.wheres) > 0 {
-			sb.WriteString(strings.Join(sub.wheres, " AND "))
+		if len(subWheres) > 0 {
+			sb.WriteString(strings.Join(subWheres, " AND "))
 		}
 		if len(sub.orWheres) > 0 {
-			if len(sub.wheres) > 0 {
+			if len(subWheres) > 0 {
 				sb.WriteString(" OR ")
 			}
 			sb.WriteString("(")
@@ -197,7 +245,7 @@ func (q *SqlQueryAdapter) Where(cond any, args ...any) QueryAdapter {
 		sb.WriteString(")")
 
 		cp.wheres = append(cp.wheres, sb.String())
-		cp.whereArgs = append(cp.whereArgs, sub.whereArgs...)
+		cp.whereArgs = append(cp.whereArgs, subWhereArgs...)
 		cp.whereArgs = append(cp.whereArgs, sub.orArgs...)
 		return cp
 	}

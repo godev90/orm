@@ -370,13 +370,17 @@ func (q *SqlQueryAdapter) Scopes(fs ...ScopeFunc) QueryAdapter {
 		return q
 	}
 
-	tmp := q.Clone()
-	// tmp.wheres, tmp.whereArgs = nil, nil
-	// tmp.orWheres, tmp.orArgs = nil, nil
+	return func(q QueryAdapter, fs ...ScopeFunc) (out QueryAdapter) {
+		out = q
+		for _, f := range fs {
+			if f == nil {
+				continue
+			}
+			out = f(out)
+		}
 
-	tmp = applyScopes(tmp, fs...).(*SqlQueryAdapter)
-
-	return q.Where(tmp)
+		return
+	}(q, fs...)
 }
 
 func (q *SqlQueryAdapter) Clone() QueryAdapter {

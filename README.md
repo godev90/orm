@@ -236,22 +236,56 @@ return tx.Commit()
 
 ### Scopes
 
+1) In-place scope (example: paginate)
 ```go
-// Define scope functions
-func ActiveUsers(q orm.QueryAdapter) orm.QueryAdapter {
-    return q.Where("status = ?", "active")
+func Paginate(page, pageSize int) ScopeFunc {
+    return func(db QueryAdapter) QueryAdapter {
+        if page <= 0 { page = 1 }
+        switch {
+        case pageSize > 100:
+            pageSize = 100
+        case pageSize <= 0:
+            pageSize = 10
+        }
+        offset := (page - 1) * pageSize
+        return db.Offset(offset).Limit(pageSize)
+    }
 }
-
-func RecentUsers(q orm.QueryAdapter) orm.QueryAdapter {
-    return q.Where("created_at > ?", time.Now().AddDate(0, -1, 0))
-}
-
-// Use scopes
-err := adapter.
-    UseModel(&User{}).
-    Scopes(ActiveUsers, RecentUsers).
-    Scan(&users)
 ```
+
+2) Isolated scope that builds a grouped WHERE (example: search across multiple columns)
+```go
+func SearchScope(keyword string, fields []string, allowed map[string]string) ScopeFunc {
+    return func(db QueryAdapter) QueryAdapter {
+        if keyword == "" || len(fields) == 0 {
+            return db
+        }
+        clone := db.Clone() // build on a clone so parent WHEREs aren't inherited
+        for _, f := range fields {
+            if col, ok := allowed[f]; ok {
+                cond := col + " LIKE ?"
+                if db.Driver() == orm.FlavorPostgres {
+                    cond = col + " ILIKE ?"
+                }
+                clone = clone.Or(cond, "%"+keyword+"%")
+            }
+        }
+        // injecting the clone groups the OR conditions: (... OR ... OR ...)
+        return db.Where(clone)
+    }
+}
+```
+
+Usage:
+```go
+db = db.Scopes(Paginate(1, 20), SearchScope("your keyword", []string{"column_a","columbb","column_c"}, allowed))
+```
+
+Notes
+- Use in-place scopes for pagination, ordering, joins, etc.
+- Use clone + db.Where(clone) pattern for isolated grouped conditions (OR blocks).
+- If a scope must add joins visible to the parent, either build on a clone and merge joins back into the parent before returning, or have the scope operate directly on the passed adapter (in-place).
+- Ensure your Where implementation trims common leading WHEREs when you pass a sub-adapter clone to avoid duplicating parent filters.
 
 ## 🧪 Testing
 

@@ -396,6 +396,10 @@ func (g *SqlQueryAdapter) Driver() driverFlavor {
 	return g.flavor
 }
 
+func (g *SqlQueryAdapter) DB() *sql.DB {
+	return g.db
+}
+
 // Enhanced security methods implementation
 func (q *SqlQueryAdapter) SafeOrder(order string) QueryAdapter {
 	// Validate the order clause first

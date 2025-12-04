@@ -2,6 +2,7 @@ package orm
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"reflect"
 	"regexp"
@@ -98,6 +99,7 @@ type (
 		Having(havings []string, args ...any) QueryAdapter
 		Clone() QueryAdapter
 		Driver() driverFlavor
+		DB() *sql.DB
 
 		// Safe methods for backward compatibility and explicit safety
 		SafeOrder(order string) QueryAdapter

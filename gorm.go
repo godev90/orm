@@ -2,6 +2,7 @@ package orm
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 
@@ -152,6 +153,11 @@ func (g *GormAdapter) First(dest any) (err error) {
 func (g *GormAdapter) Driver() driverFlavor {
 	sqlDB, _ := g.db.DB()
 	return detectFlavor(sqlDB)
+}
+
+func (g *GormAdapter) DB() *sql.DB {
+	sqlDB, _ := g.db.DB()
+	return sqlDB
 }
 
 // Enhanced security methods implementation

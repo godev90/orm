@@ -369,6 +369,7 @@ func (q *SqlQueryAdapter) SafeOrder(order string) QueryAdapter {
 	if err := ValidateOrderBy(order); err != nil {
 		// Return empty adapter or handle error appropriately
 		// For now, we'll ignore invalid order clauses
+		log.Printf("WARNING: invalid ORDER BY clause %q: %v", order, err)
 		return q
 	}
 	return q.Order(order)
@@ -378,6 +379,7 @@ func (q *SqlQueryAdapter) SafeJoin(joinClause string, args ...any) QueryAdapter 
 	// Validate the join clause first
 	if err := ValidateJoinClause(joinClause); err != nil {
 		// Return empty adapter or handle error appropriately
+		log.Printf("WARNING: invalid JOIN clause %q: %v", joinClause, err)
 		return q
 	}
 	return q.Join(joinClause, args...)
@@ -388,6 +390,7 @@ func (q *SqlQueryAdapter) SafeSelect(selections []string) QueryAdapter {
 	sanitized, err := SanitizeSelectFields(selections)
 	if err != nil {
 		// Return adapter with default fields on error
+		log.Printf("WARNING: invalid SELECT fields %q: %v", selections, err)
 		return q
 	}
 	return q.Select(sanitized)
@@ -398,6 +401,7 @@ func (q *SqlQueryAdapter) SafeGroupBy(groupbys []string) QueryAdapter {
 	sanitized, err := SanitizeColumnNames(groupbys)
 	if err != nil {
 		// Return adapter unchanged on error
+		log.Printf("WARNING: invalid GROUP BY fields %q: %v", groupbys, err)
 		return q
 	}
 	return q.GroupBy(sanitized)
@@ -407,6 +411,7 @@ func (q *SqlQueryAdapter) SafeHaving(havings []string, args ...any) QueryAdapter
 	// Validate the having clauses
 	if err := ValidateHavingClause(havings); err != nil {
 		// Return adapter unchanged on error
+		log.Printf("WARNING: invalid HAVING fields %q: %v", havings, err)
 		return q
 	}
 	return q.Having(havings, args...)

@@ -207,6 +207,14 @@ func (q *SqlQueryAdapter) Where(cond any, args ...any) QueryAdapter {
 		subWheres := append([]string(nil), sub.wheres...)
 		subWhereArgs := append([]any(nil), sub.whereArgs...)
 
+		// Merge joins & join args from the sub-query so joined tables are present
+		subJoins := append([]string(nil), sub.joins...)
+		subJoinArgs := append([]any(nil), sub.joinArgs...)
+		if len(subJoins) > 0 {
+			cp.joins = append(cp.joins, subJoins...)
+			cp.joinArgs = append(cp.joinArgs, subJoinArgs...)
+		}
+
 		if sub.model == q.model && len(q.wheres) > 0 && len(sub.wheres) >= len(q.wheres) {
 			common := 0
 			argsToDrop := 0
@@ -289,57 +297,19 @@ func (q *SqlQueryAdapter) Or(cond any, args ...any) QueryAdapter {
 }
 
 func (q *SqlQueryAdapter) Join(joinClause string, args ...any) QueryAdapter {
-	// Automatically validate join clause for safety
-	if err := ValidateJoinClause(joinClause); err != nil {
-		// Return adapter unchanged if validation fails
-		return q
-	}
-	cp := q.clone()
-	cp.joins = append(cp.joins, joinClause)
-	cp.joinArgs = append(cp.joinArgs, args...)
-	return cp
+	return q.UnsafeJoin(joinClause, args...)
 }
 
 func (q *SqlQueryAdapter) Select(sel []string) QueryAdapter {
-	// Automatically sanitize select fields for safety
-	sanitized, err := SanitizeSelectFields(sel)
-	if err != nil {
-		// Return adapter unchanged if sanitization fails
-		return q
-	}
-	cp := q.clone()
-	if len(sanitized) > 0 {
-		cp.fields = sanitized
-	}
-	return cp
+	return q.UnsafeSelect(sel)
 }
 
 func (q *SqlQueryAdapter) GroupBy(cols []string) QueryAdapter {
-	// Automatically sanitize group by fields for safety
-	sanitized, err := SanitizeColumnNames(cols)
-	if err != nil {
-		// Return adapter unchanged if sanitization fails
-		return q
-	}
-	cp := q.clone()
-	if len(sanitized) > 0 {
-		cp.groups = sanitized
-	}
-	return cp
+	return q.UnsafeGroupBy(cols)
 }
 
 func (q *SqlQueryAdapter) Having(cols []string, args ...any) QueryAdapter {
-	// Automatically validate having clauses for safety
-	if err := ValidateHavingClause(cols); err != nil {
-		// Return adapter unchanged if validation fails
-		return q
-	}
-	cp := q.clone()
-	if len(cols) > 0 {
-		cp.havings = cols
-		cp.havingArgs = append(cp.havingArgs, args...)
-	}
-	return cp
+	return q.UnsafeHaving(cols, args...)
 }
 
 func (q *SqlQueryAdapter) Limit(l int) QueryAdapter {
@@ -355,14 +325,7 @@ func (q *SqlQueryAdapter) Offset(o int) QueryAdapter {
 }
 
 func (q *SqlQueryAdapter) Order(order string) QueryAdapter {
-	// Automatically validate order clause for safety
-	if err := ValidateOrderBy(order); err != nil {
-		// Return adapter unchanged if validation fails
-		return q
-	}
-	cp := q.clone()
-	cp.orderBy = order
-	return cp
+	return q.UnsafeOrder(order)
 }
 
 func (q *SqlQueryAdapter) Scopes(fs ...ScopeFunc) QueryAdapter {
